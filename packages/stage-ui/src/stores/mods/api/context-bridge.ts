@@ -37,6 +37,37 @@ export const useContextBridgeStore = defineStore('mods:api:context-bridge', () =
   const disposeHookFns = ref<Array<() => void>>([])
   let remoteStreamGuard: { sessionId: string, generation: number } | null = null
 
+  function toSerializable<T>(value: T): T {
+    return JSON.parse(JSON.stringify(toRaw(value)))
+  }
+
+  function safeBroadcastStreamEvent(event: ChatStreamEvent) {
+    try {
+      broadcastStreamEvent(toSerializable(event))
+    }
+    catch (error) {
+      console.warn('Failed to broadcast stream event:', error)
+    }
+  }
+
+  function safeBroadcastContext(event: ContextMessage) {
+    try {
+      broadcastContext(toSerializable(event))
+    }
+    catch (error) {
+      console.warn('Failed to broadcast context event:', error)
+    }
+  }
+
+  function safeServerChannelSend(event: Parameters<typeof serverChannelStore.send>[0]) {
+    try {
+      serverChannelStore.send(toSerializable(event))
+    }
+    catch (error) {
+      console.warn('Failed to send server channel event:', error)
+    }
+  }
+
   async function initialize() {
     await mutex.acquire()
 
@@ -56,7 +87,7 @@ export const useContextBridgeStore = defineStore('mods:api:context-bridge', () =
           createdAt: Date.now(),
         }
         chatContext.ingestContextMessage(contextMessage)
-        broadcastContext(toRaw(contextMessage))
+        safeBroadcastContext(contextMessage)
       }))
 
       disposeHookFns.value.push(serverChannelStore.onEvent('input:text', async (event) => {
@@ -149,74 +180,77 @@ export const useContextBridgeStore = defineStore('mods:api:context-bridge', () =
           if (isProcessingRemoteStream)
             return
 
-          broadcastStreamEvent({ type: 'before-compose', message, sessionId: chatSession.activeSessionId, context: JSON.parse(JSON.stringify(toRaw(context))) })
+          safeBroadcastStreamEvent({ type: 'before-compose', message, sessionId: chatSession.activeSessionId, context: toSerializable(context) })
         }),
         chatOrchestrator.onAfterMessageComposed(async (message, context) => {
           if (isProcessingRemoteStream)
             return
 
-          broadcastStreamEvent({ type: 'after-compose', message, sessionId: chatSession.activeSessionId, context: JSON.parse(JSON.stringify(toRaw(context))) })
+          safeBroadcastStreamEvent({ type: 'after-compose', message, sessionId: chatSession.activeSessionId, context: toSerializable(context) })
         }),
         chatOrchestrator.onBeforeSend(async (message, context) => {
           if (isProcessingRemoteStream)
             return
 
-          broadcastStreamEvent({ type: 'before-send', message, sessionId: chatSession.activeSessionId, context: JSON.parse(JSON.stringify(toRaw(context))) })
+          safeBroadcastStreamEvent({ type: 'before-send', message, sessionId: chatSession.activeSessionId, context: toSerializable(context) })
         }),
         chatOrchestrator.onAfterSend(async (message, context) => {
           if (isProcessingRemoteStream)
             return
 
-          broadcastStreamEvent({ type: 'after-send', message, sessionId: chatSession.activeSessionId, context: JSON.parse(JSON.stringify(toRaw(context))) })
+          safeBroadcastStreamEvent({ type: 'after-send', message, sessionId: chatSession.activeSessionId, context: toSerializable(context) })
         }),
         chatOrchestrator.onTokenLiteral(async (literal, context) => {
           if (isProcessingRemoteStream)
             return
 
-          broadcastStreamEvent({ type: 'token-literal', literal, sessionId: chatSession.activeSessionId, context: JSON.parse(JSON.stringify(toRaw(context))) })
+          safeBroadcastStreamEvent({ type: 'token-literal', literal, sessionId: chatSession.activeSessionId, context: toSerializable(context) })
         }),
         chatOrchestrator.onTokenSpecial(async (special, context) => {
           if (isProcessingRemoteStream)
             return
 
-          broadcastStreamEvent({ type: 'token-special', special, sessionId: chatSession.activeSessionId, context: JSON.parse(JSON.stringify(toRaw(context))) })
+          safeBroadcastStreamEvent({ type: 'token-special', special, sessionId: chatSession.activeSessionId, context: toSerializable(context) })
         }),
         chatOrchestrator.onStreamEnd(async (context) => {
           if (isProcessingRemoteStream)
             return
 
-          broadcastStreamEvent({ type: 'stream-end', sessionId: chatSession.activeSessionId, context: JSON.parse(JSON.stringify(toRaw(context))) })
+          safeBroadcastStreamEvent({ type: 'stream-end', sessionId: chatSession.activeSessionId, context: toSerializable(context) })
         }),
         chatOrchestrator.onAssistantResponseEnd(async (message, context) => {
           if (isProcessingRemoteStream)
             return
 
-          broadcastStreamEvent({ type: 'assistant-end', message, sessionId: chatSession.activeSessionId, context: JSON.parse(JSON.stringify(toRaw(context))) })
+          safeBroadcastStreamEvent({ type: 'assistant-end', message, sessionId: chatSession.activeSessionId, context: toSerializable(context) })
         }),
 
         chatOrchestrator.onAssistantMessage(async (message, _messageText, context) => {
-          serverChannelStore.send({
+          const serializableContext = toSerializable(context)
+          const serializableMessage = toSerializable(message)
+          safeServerChannelSend({
             type: 'output:gen-ai:chat:message',
             data: {
-              ...context.input?.data,
-              message,
+              ...serializableContext.input?.data,
+              'message': serializableMessage,
               'stage-web': isStageWeb(),
               'stage-tamagotchi': isStageTamagotchi(),
               'gen-ai:chat': {
-                message: context.message as UserMessage,
-                composedMessage: context.composedMessage,
-                contexts: context.contexts,
-                input: context.input,
+                message: serializableContext.message as UserMessage,
+                composedMessage: serializableContext.composedMessage,
+                contexts: serializableContext.contexts,
+                input: serializableContext.input,
               },
             },
           })
         }),
 
         chatOrchestrator.onChatTurnComplete(async (chat, context) => {
-          serverChannelStore.send({
+          const serializableContext = toSerializable(context)
+          safeServerChannelSend({
             type: 'output:gen-ai:chat:complete',
             data: {
-              ...context.input?.data,
+              ...serializableContext.input?.data,
               'message': chat.output,
               // TODO: tool calls should be captured properly
               'toolCalls': [],
@@ -230,10 +264,10 @@ export const useContextBridgeStore = defineStore('mods:api:context-bridge', () =
                 source: 'estimate-based',
               },
               'gen-ai:chat': {
-                message: context.message as UserMessage,
-                composedMessage: context.composedMessage,
-                contexts: context.contexts,
-                input: context.input,
+                message: serializableContext.message as UserMessage,
+                composedMessage: serializableContext.composedMessage,
+                contexts: serializableContext.contexts,
+                input: serializableContext.input,
               },
             },
           })

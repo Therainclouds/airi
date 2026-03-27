@@ -41,6 +41,36 @@ export const usePerfTracerBridgeStore = defineStore('perfTracerBridge', () => {
   let unsubscribe: (() => void) | undefined
   let state: PerfTracerState = 'idle'
 
+  function toSerializable<T>(value: T): T {
+    return JSON.parse(JSON.stringify(value, (_key, candidate) => {
+      if (typeof candidate === 'bigint')
+        return candidate.toString()
+      if (typeof candidate === 'function')
+        return undefined
+      if (candidate instanceof Error) {
+        return {
+          name: candidate.name,
+          message: candidate.message,
+          stack: candidate.stack,
+        }
+      }
+      if (candidate instanceof Map)
+        return Object.fromEntries(candidate)
+      if (candidate instanceof Set)
+        return Array.from(candidate)
+      return candidate
+    }))
+  }
+
+  function safePost(message: PerfTracerMessage) {
+    try {
+      post(toSerializable(message))
+    }
+    catch (error) {
+      console.warn('[perf-tracer-bridge] post failed:', error)
+    }
+  }
+
   function enableLocal(token = BRIDGE_TOKEN) {
     if (release)
       return
@@ -60,7 +90,7 @@ export const usePerfTracerBridgeStore = defineStore('perfTracerBridge', () => {
         return
       if (event.meta?.[RELAY_META_KEY])
         return
-      post({
+      safePost({
         type: 'event',
         event: {
           ...event,
@@ -123,12 +153,12 @@ export const usePerfTracerBridgeStore = defineStore('perfTracerBridge', () => {
   function requestEnable(token?: string, mode: PerfTracerMode = 'forward', localState: PerfTracerState = mode) {
     const tokenToUse = token ?? BRIDGE_TOKEN
     transition(localState, tokenToUse)
-    post({ type: 'enable', token: tokenToUse, origin: instanceId, mode })
+    safePost({ type: 'enable', token: tokenToUse, origin: instanceId, mode })
   }
 
   function requestDisable(token?: string) {
     transition('idle')
-    post({ type: 'disable', token: token ?? BRIDGE_TOKEN, origin: instanceId })
+    safePost({ type: 'disable', token: token ?? BRIDGE_TOKEN, origin: instanceId })
   }
 
   return {

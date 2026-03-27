@@ -8,7 +8,9 @@ import { defineProvider } from '../registry'
 
 const lobsterAgentConfigSchema = z.object({
   apiKey: z
-    .string('API Key'),
+    .string('API Key')
+    .optional()
+    .default('lobsterai-agent-default-key'),
   baseUrl: z
     .string('Base URL')
     .optional()
@@ -16,6 +18,14 @@ const lobsterAgentConfigSchema = z.object({
 })
 
 type LobsterAgentConfig = z.input<typeof lobsterAgentConfigSchema>
+
+function normalizeApiKey(apiKey?: string): string {
+  const value = apiKey?.trim()
+  if (!value) {
+    return 'lobsterai-agent-default-key'
+  }
+  return value
+}
 
 function normalizeBaseUrl(baseUrl?: string): string {
   const value = baseUrl?.trim()
@@ -29,12 +39,13 @@ function normalizeBaseUrl(baseUrl?: string): string {
 }
 
 function createLobsterAgentProvider(config: LobsterAgentConfig): XsaiChatProvider {
-  return createOpenAI(config.apiKey as string, normalizeBaseUrl(config.baseUrl as string))
+  return createOpenAI(normalizeApiKey(config.apiKey as string), normalizeBaseUrl(config.baseUrl as string))
 }
 
 function normalizeValidationConfig(config: any) {
   return {
     ...config,
+    apiKey: normalizeApiKey(config?.apiKey as string),
     baseUrl: normalizeBaseUrl(config?.baseUrl as string),
   }
 }
@@ -90,13 +101,13 @@ export const providerLobsterAgent = defineProvider<LobsterAgentConfig>({
 
   createProvider(config) {
     return createLobsterAgentProvider({
-      apiKey: config.apiKey as string,
+      apiKey: normalizeApiKey(config.apiKey as string),
       baseUrl: normalizeBaseUrl(config.baseUrl as string),
     })
   },
 
-  validationRequiredWhen(config) {
-    return !!config.apiKey?.trim()
+  validationRequiredWhen(_config) {
+    return true
   },
 
   validators: {

@@ -12,6 +12,7 @@ import { useProvidersStore } from '@proj-airi/stage-ui/stores/providers'
 import { useSettings, useSettingsAudioDevice } from '@proj-airi/stage-ui/stores/settings'
 import { BasicTextarea, FieldSelect } from '@proj-airi/ui'
 import { until } from '@vueuse/core'
+import { nanoid } from 'nanoid'
 import { storeToRefs } from 'pinia'
 import { TooltipContent, TooltipProvider, TooltipRoot, TooltipTrigger } from 'reka-ui'
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
@@ -24,8 +25,11 @@ const hearingTooltipOpen = ref(false)
 const isComposing = ref(false)
 const isListening = ref(false) // Transcription listening state (separate from microphone enabled)
 
-const attachments = ref<{ type: 'image', data: string, mimeType: string, name: string }[]>([])
+interface ChatAttachment { type: 'image' | 'file', data: string, mimeType: string, name: string }
+const attachments = ref<ChatAttachment[]>([])
 const fileInput = ref<HTMLInputElement>()
+const lobsterSkills = ref<Array<{ id: string, name: string, enabled?: boolean }>>([])
+const selectedLobsterSkillIds = ref<string[]>([])
 
 function handleFileClick() {
   fileInput.value?.click()
@@ -37,9 +41,6 @@ function handleFileChange(event: Event) {
     return
 
   for (const file of Array.from(target.files)) {
-    if (!file.type.startsWith('image/'))
-      continue
-
     const reader = new FileReader()
     reader.onload = (e) => {
       const result = e.target?.result as string
@@ -47,7 +48,7 @@ function handleFileChange(event: Event) {
       const mimeType = mimePart.split(':')[1]
 
       attachments.value.push({
-        type: 'image',
+        type: file.type.startsWith('image/') ? 'image' : 'file',
         data,
         mimeType,
         name: file.name,
@@ -74,6 +75,215 @@ const { ingest, onAfterMessageComposed, discoverToolsCompatibility } = chatOrche
 const { messages } = storeToRefs(chatSession)
 const { audioContext } = useAudioContext()
 const { t } = useI18n()
+
+function resolveLobsterBaseUrl(providerConfig: Record<string, any>) {
+  const configured = typeof providerConfig?.baseUrl === 'string' ? providerConfig.baseUrl.trim() : ''
+  const baseUrl = configured || 'http://127.0.0.1:19888'
+  return baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl
+}
+
+function normalizeLobsterApiKey(providerConfig: Record<string, any>) {
+  const configured = String(providerConfig?.apiKey || '').trim()
+  return configured || 'lobsterai-agent-default-key'
+}
+
+function normalizeAssistantContent(content: unknown) {
+  if (typeof content === 'string')
+    return content
+  if (Array.isArray(content)) {
+    return content.map((part: any) => {
+      if (typeof part === 'string')
+        return part
+      if (part?.type === 'text' && typeof part.text === 'string')
+        return part.text
+      return ''
+    }).join('')
+  }
+  return ''
+}
+
+function buildLobsterUserContent(text: string, imageAttachments: ChatAttachment[]) {
+  if (imageAttachments.length === 0)
+    return text
+  const parts: Array<any> = [{ type: 'text', text }]
+  for (const attachment of imageAttachments) {
+    parts.push({
+      type: 'image_url',
+      image_url: {
+        url: `data:${attachment.mimeType};base64,${attachment.data}`,
+      },
+    })
+  }
+  return parts
+}
+
+async function loadLobsterSkills() {
+  if (activeProvider.value !== 'lobster-agent')
+    return
+  const providerConfig = providersStore.getProviderConfig(activeProvider.value) as Record<string, any>
+  const baseUrl = resolveLobsterBaseUrl(providerConfig)
+  const apiKey = normalizeLobsterApiKey(providerConfig)
+  const response = await fetch(`${baseUrl}/api/agent/skills`, {
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+    },
+  })
+  const data = await response.json().catch(() => null)
+  if (!response.ok) {
+    throw new Error(String(data?.error || `Skills API error (${response.status})`))
+  }
+  const skills = Array.isArray(data?.skills) ? data.skills : []
+  lobsterSkills.value = skills.map((item: any) => ({
+    id: String(item.id || ''),
+    name: String(item.name || item.id || ''),
+    enabled: !!item.enabled,
+  })).filter((item: { id: string }) => !!item.id)
+  selectedLobsterSkillIds.value = lobsterSkills.value.filter(item => item.enabled).map(item => item.id)
+}
+
+async function uploadLobsterFiles(baseUrl: string, apiKey: string, fileAttachments: ChatAttachment[]) {
+  const uploaded: string[] = []
+  for (const attachment of fileAttachments) {
+    const response = await fetch(`${baseUrl}/api/agent/files/upload`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        name: attachment.name,
+        mimeType: attachment.mimeType,
+        base64Data: attachment.data,
+      }),
+    })
+    const data = await response.json().catch(() => null)
+    if (!response.ok) {
+      throw new Error(String(data?.error || `File upload error (${response.status})`))
+    }
+    const filePath = String(data?.file?.path || '')
+    if (filePath)
+      uploaded.push(filePath)
+  }
+  return uploaded
+}
+
+async function streamLobsterAssistantResponse(response: Response, onDelta: (delta: string) => Promise<void>) {
+  const reader = response.body?.getReader()
+  if (!reader)
+    return
+
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done)
+      break
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() || ''
+
+    for (const rawLine of lines) {
+      const line = rawLine.trim()
+      if (!line.startsWith('data:'))
+        continue
+      const payload = line.slice(5).trim()
+      if (!payload || payload === '[DONE]')
+        continue
+      let json: any
+      try {
+        json = JSON.parse(payload)
+      }
+      catch {
+        continue
+      }
+      const delta = json?.choices?.[0]?.delta?.content
+      if (typeof delta === 'string' && delta.length > 0) {
+        await onDelta(delta)
+      }
+    }
+  }
+}
+
+async function sendViaLobsterDirect(textToSend: string, sendingAttachments: ChatAttachment[]) {
+  const providerConfig = providersStore.getProviderConfig(activeProvider.value) as Record<string, any>
+  const apiKey = normalizeLobsterApiKey(providerConfig)
+
+  const baseUrl = resolveLobsterBaseUrl(providerConfig)
+  const sessionId = chatSession.activeSessionId
+  const sessionMessages = chatSession.getSessionMessages(sessionId)
+  const imageAttachments = sendingAttachments.filter(item => item.type === 'image')
+  const fileAttachments = sendingAttachments.filter(item => item.type === 'file')
+  const uploadedFilePaths = await uploadLobsterFiles(baseUrl, apiKey, fileAttachments)
+  const promptWithFiles = uploadedFilePaths.length > 0
+    ? `${textToSend || '请先查看我上传的文件并回答问题。'}\n${uploadedFilePaths.map(filePath => `input file: ${filePath}`).join('\n')}`
+    : textToSend
+  const userContent = buildLobsterUserContent(promptWithFiles, imageAttachments)
+  const hookContext: any = {
+    message: textToSend,
+    composedMessage: textToSend,
+    contexts: [],
+    input: { data: {} },
+  }
+
+  sessionMessages.push({
+    role: 'user',
+    content: userContent as any,
+    createdAt: Date.now(),
+    id: nanoid(),
+  })
+  chatSession.persistSessionMessages(sessionId)
+
+  const payload = {
+    model: activeModel.value,
+    stream: true,
+    skillIds: selectedLobsterSkillIds.value,
+    messages: [{ role: 'user', content: userContent }],
+  }
+  await chatOrchestrator.emitBeforeSendHooks(textToSend, hookContext)
+
+  const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  })
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => null)
+    throw new Error(String(data?.error || data?.message || `Lobster API error (${response.status})`))
+  }
+  if (!response.body) {
+    throw new Error('Lobster API returned empty stream body')
+  }
+
+  const assistantMessage: any = {
+    role: 'assistant',
+    content: '',
+    slices: [],
+    tool_results: [],
+    createdAt: Date.now(),
+    id: nanoid(),
+  }
+  sessionMessages.push(assistantMessage)
+  chatSession.persistSessionMessages(sessionId)
+
+  let assistantContent = ''
+  await streamLobsterAssistantResponse(response, async (delta) => {
+    assistantContent += delta
+    assistantMessage.content = assistantContent
+    assistantMessage.slices = [{ type: 'text', text: assistantContent }]
+    chatSession.persistSessionMessages(sessionId)
+    await chatOrchestrator.emitTokenLiteralHooks(delta, hookContext)
+  })
+  assistantMessage.content = normalizeAssistantContent(assistantContent)
+  assistantMessage.slices = [{ type: 'text', text: assistantMessage.content }]
+  chatSession.persistSessionMessages(sessionId)
+  await chatOrchestrator.emitStreamEndHooks(hookContext)
+  await chatOrchestrator.emitAssistantResponseEndHooks(assistantMessage.content, hookContext)
+}
 
 // Transcription pipeline
 const hearingStore = useHearingStore()
@@ -155,14 +365,20 @@ async function handleSend() {
   attachments.value = []
 
   try {
-    const providerConfig = providersStore.getProviderConfig(activeProvider.value)
-
-    await ingest(textToSend, {
-      chatProvider: await providersStore.getProviderInstance(activeProvider.value) as ChatProvider,
-      model: activeModel.value,
-      providerConfig,
-      attachments: sendingAttachments.map(({ type, data, mimeType }) => ({ type, data, mimeType })),
-    })
+    if (activeProvider.value === 'lobster-agent') {
+      await sendViaLobsterDirect(textToSend, sendingAttachments)
+    }
+    else {
+      const providerConfig = providersStore.getProviderConfig(activeProvider.value)
+      await ingest(textToSend, {
+        chatProvider: await providersStore.getProviderInstance(activeProvider.value) as ChatProvider,
+        model: activeModel.value,
+        providerConfig,
+        attachments: sendingAttachments
+          .filter((item): item is ChatAttachment & { type: 'image' } => item.type === 'image')
+          .map(({ data, mimeType }) => ({ type: 'image' as const, data, mimeType })),
+      })
+    }
   }
   catch (error) {
     messageInput.value = textToSend
@@ -184,6 +400,11 @@ watch(hearingTooltipOpen, async (value) => {
 watch([activeProvider, activeModel], async () => {
   if (activeProvider.value && activeModel.value) {
     await discoverToolsCompatibility(activeModel.value, await providersStore.getProviderInstance<ChatProvider>(activeProvider.value), [])
+  }
+  if (activeProvider.value === 'lobster-agent') {
+    await loadLobsterSkills().catch((error) => {
+      console.warn('[ChatArea] Failed to load lobster skills:', error)
+    })
   }
 })
 
@@ -456,14 +677,17 @@ watch(autoSendEnabled, (enabled) => {
       ]"
     >
       <!-- Attachments Preview -->
-      <div v-if="attachments.length > 0" class="flex gap-2 px-4 pt-4 overflow-x-auto pb-2">
-        <div v-for="(att, idx) in attachments" :key="idx" class="relative group shrink-0">
-          <img :src="`data:${att.mimeType};base64,${att.data}`" class="h-16 w-16 object-cover rounded-md border border-neutral-200 dark:border-neutral-700 shadow-sm" />
+      <div v-if="attachments.length > 0" class="flex gap-2 overflow-x-auto px-4 pb-2 pt-4">
+        <div v-for="(att, idx) in attachments" :key="idx" class="group relative shrink-0">
+          <img v-if="att.type === 'image'" :src="`data:${att.mimeType};base64,${att.data}`" class="h-16 w-16 border border-neutral-200 rounded-md object-cover shadow-sm dark:border-neutral-700">
+          <div v-else class="h-16 min-w-24 flex items-center border border-neutral-200 rounded-md bg-neutral-50 px-2 text-xs shadow-sm dark:border-neutral-700 dark:bg-neutral-800">
+            {{ att.name }}
+          </div>
           <button
-            class="absolute -top-1.5 -right-1.5 bg-red-500 text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity shadow-sm hover:bg-red-600"
+            class="absolute rounded-full bg-red-500 p-0.5 text-white opacity-0 shadow-sm transition-opacity -right-1.5 -top-1.5 hover:bg-red-600 group-hover:opacity-100"
             @click="removeAttachment(idx)"
           >
-            <div class="i-ph:x w-3 h-3" />
+            <div class="i-ph:x h-3 w-3" />
           </button>
         </div>
       </div>
@@ -484,16 +708,28 @@ watch(autoSendEnabled, (enabled) => {
         @compositionend="isComposing = false"
       />
 
+      <div v-if="activeProvider === 'lobster-agent' && lobsterSkills.length > 0" class="flex flex-wrap gap-2 px-4 pb-2">
+        <button
+          v-for="skill in lobsterSkills"
+          :key="skill.id"
+          class="border rounded-full px-2 py-1 text-xs transition-colors"
+          :class="selectedLobsterSkillIds.includes(skill.id) ? 'bg-primary-500/15 border-primary-400 text-primary-700 dark:text-primary-200' : 'bg-neutral-100 dark:bg-neutral-800 border-neutral-300 dark:border-neutral-600 text-neutral-600 dark:text-neutral-300'"
+          @click="selectedLobsterSkillIds = selectedLobsterSkillIds.includes(skill.id) ? selectedLobsterSkillIds.filter(id => id !== skill.id) : [...selectedLobsterSkillIds, skill.id]"
+        >
+          {{ skill.name }}
+        </button>
+      </div>
+
       <!-- Bottom-left action button: Microphone -->
       <div
         absolute bottom-2 left-2 z-10 flex items-center gap-2
       >
         <!-- File Button -->
-        <input ref="fileInput" type="file" multiple accept="image/*" class="hidden" @change="handleFileChange" />
+        <input ref="fileInput" type="file" multiple class="hidden" @change="handleFileChange">
         <button
           class="h-8 w-8 flex items-center justify-center rounded-md outline-none transition-all duration-200 active:scale-95 hover:bg-neutral-100 dark:hover:bg-neutral-800"
           text="lg neutral-500 dark:neutral-400"
-          title="Attach image"
+          title="Attach file"
           @click="handleFileClick"
         >
           <div class="i-ph:paperclip h-5 w-5" />

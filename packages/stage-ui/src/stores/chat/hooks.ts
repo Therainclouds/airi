@@ -141,54 +141,63 @@ export function createChatHooks(): ChatHookRegistry {
     onChatTurnCompleteHooks.length = 0
   }
 
+  async function runHookSafely(action: () => Promise<void>) {
+    try {
+      await action()
+    }
+    catch (error) {
+      console.warn('[chat-hooks] hook execution failed:', error)
+    }
+  }
+
   async function emitBeforeMessageComposedHooks(message: string, context: Omit<ChatStreamEventContext, 'composedMessage'>) {
     for (const hook of onBeforeMessageComposedHooks)
-      await hook(message, context)
+      await runHookSafely(async () => await hook(message, context))
   }
 
   async function emitAfterMessageComposedHooks(message: string, context: ChatStreamEventContext) {
     for (const hook of onAfterMessageComposedHooks)
-      await hook(message, context)
+      await runHookSafely(async () => await hook(message, context))
   }
 
   async function emitBeforeSendHooks(message: string, context: ChatStreamEventContext) {
     for (const hook of onBeforeSendHooks)
-      await hook(message, context)
+      await runHookSafely(async () => await hook(message, context))
   }
 
   async function emitAfterSendHooks(message: string, context: ChatStreamEventContext) {
     for (const hook of onAfterSendHooks)
-      await hook(message, context)
+      await runHookSafely(async () => await hook(message, context))
   }
 
   async function emitTokenLiteralHooks(literal: string, context: ChatStreamEventContext) {
     for (const hook of onTokenLiteralHooks)
-      await hook(literal, context)
+      await runHookSafely(async () => await hook(literal, context))
   }
 
   async function emitTokenSpecialHooks(special: string, context: ChatStreamEventContext) {
     for (const hook of onTokenSpecialHooks)
-      await hook(special, context)
+      await runHookSafely(async () => await hook(special, context))
   }
 
   async function emitStreamEndHooks(context: ChatStreamEventContext) {
     for (const hook of onStreamEndHooks)
-      await hook(context)
+      await runHookSafely(async () => await hook(context))
   }
 
   async function emitAssistantResponseEndHooks(message: string, context: ChatStreamEventContext) {
     for (const hook of onAssistantResponseEndHooks)
-      await hook(message, context)
+      await runHookSafely(async () => await hook(message, context))
   }
 
   async function emitAssistantMessageHooks(message: StreamingAssistantMessage, messageText: string, context: ChatStreamEventContext) {
     for (const hook of onAssistantMessageHooks)
-      await hook(message, messageText, context)
+      await runHookSafely(async () => await hook(message, messageText, context))
   }
 
   async function emitChatTurnCompleteHooks(chat: { output: StreamingAssistantMessage, outputText: string, toolCalls: ToolMessage[] }, context: ChatStreamEventContext) {
     for (const hook of onChatTurnCompleteHooks)
-      await hook(chat, context)
+      await runHookSafely(async () => await hook(chat, context))
   }
 
   return {
