@@ -2,6 +2,7 @@ import type { WebSocketEventInputs } from '@proj-airi/server-sdk'
 import type { ChatProvider } from '@xsai-ext/providers/utils'
 import type { CommonContentPart, Message, ToolMessage } from '@xsai/shared-chat'
 
+import type { LobsterBridgeEvent } from '../services/lobster-bridge'
 import type { ChatAssistantMessage, ChatHistoryItem, ChatSlices, ChatStreamEventContext, StreamingAssistantMessage } from '../types/chat'
 import type { StreamEvent, StreamOptions } from './llm'
 
@@ -13,6 +14,7 @@ import { ref, toRaw } from 'vue'
 import { useAnalytics } from '../composables'
 import { useLlmmarkerParser } from '../composables/llm-marker-parser'
 import { categorizeResponse, createStreamingCategorizer } from '../composables/response-categoriser'
+import { streamLobsterBridge } from '../services/lobster-bridge'
 import { createDatetimeContext } from './chat/context-providers'
 import { useChatContextStore } from './chat/context-store'
 import { createChatHooks } from './chat/hooks'
@@ -26,6 +28,10 @@ interface SendOptions {
   chatProvider: ChatProvider
   providerConfig?: Record<string, unknown>
   attachments?: { type: 'image', data: string, mimeType: string }[]
+  lobster?: {
+    skillIds?: string[]
+    fileAttachments?: { type: 'file', data: string, mimeType: string, name: string }[]
+  }
   tools?: StreamOptions['tools']
   input?: WebSocketEventInputs
 }
@@ -64,6 +70,44 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
   const sending = ref(false)
   const pendingQueuedSends = ref<QueuedSend[]>([])
   const hooks = createChatHooks()
+
+  function buildBridgeActToken(event: Extract<LobsterBridgeEvent, { type: 'state.changed' }>) {
+    const emotionMap: Record<string, string> = {
+      think: 'think',
+      tool_use: 'surprised',
+      ask_user: 'pulse',
+      success: 'happy',
+      error: 'surprised',
+    }
+    const emotion = emotionMap[event.state] || event.emotion || 'think'
+    return `<|ACT:${JSON.stringify({ emotion: { name: emotion, intensity: 1 }, force: true, holdMs: 1800 })}|>`
+  }
+
+  function buildLobsterBridgeSystemPrompt(messages: Message[]) {
+    const systemMessage = messages.find(message => message.role === 'system')
+    if (!systemMessage) {
+      return ''
+    }
+    if (typeof systemMessage.content === 'string') {
+      return systemMessage.content.trim()
+    }
+    if (!Array.isArray(systemMessage.content)) {
+      return ''
+    }
+    return systemMessage.content
+      .map((part) => {
+        if (typeof part === 'string') {
+          return part
+        }
+        if (part && typeof part === 'object' && 'text' in part && typeof part.text === 'string') {
+          return part.text
+        }
+        return ''
+      })
+      .filter(Boolean)
+      .join('\n')
+      .trim()
+  }
 
   const sendQueue = createQueue<QueuedSend>({
     handlers: [
@@ -240,6 +284,7 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
             }
 
             if (ctx.data.type === 'tool-call-result') {
+              buildingMessage.slices.push(ctx.data)
               buildingMessage.tool_results.push(ctx.data)
               updateUI()
             }
@@ -288,7 +333,8 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
 
       let fullText = ''
       const headers = (options.providerConfig?.headers || {}) as Record<string, string>
-      const streamTimeoutMs = 25000
+      const isLobsterBridge = activeProvider.value === 'lobster-agent'
+      const streamTimeoutMs = isLobsterBridge ? 180000 : 25000
       let streamTimeoutId: ReturnType<typeof setTimeout> | undefined
       let timeoutReject: ((err: Error) => void) | null = null
       const timeoutPromise = new Promise<void>((_, reject) => {
@@ -308,41 +354,129 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
 
       scheduleStreamTimeout()
       try {
-        await Promise.race([
-          llmStore.stream(options.model, options.chatProvider, newMessages as Message[], {
-            headers,
-            tools: options.tools,
-            onStreamEvent: async (event: StreamEvent) => {
-              scheduleStreamTimeout()
-              switch (event.type) {
-                case 'tool-call':
-                  toolCallQueue.enqueue({
-                    type: 'tool-call',
-                    toolCall: event,
-                  })
+        if (isLobsterBridge) {
+          await Promise.race([
+            streamLobsterBridge({
+              airiSessionId: sessionId,
+              text: sendingMessage,
+              systemPrompt: buildLobsterBridgeSystemPrompt(newMessages as Message[]),
+              model: options.model,
+              providerConfig: (options.providerConfig || {}) as Record<string, any>,
+              imageAttachments: options.attachments || [],
+              fileAttachments: options.lobster?.fileAttachments || [],
+              skillIds: options.lobster?.skillIds || [],
+              onEvent: async (event) => {
+                scheduleStreamTimeout()
+                switch (event.type) {
+                  case 'session.bound':
+                    break
+                  case 'state.changed':
+                    await hooks.emitBridgeStateChangedHooks({
+                      state: event.state,
+                      emotion: event.emotion,
+                      toolName: event.toolName,
+                      reason: event.reason,
+                    }, streamingMessageContext)
+                    await parser.consume(buildBridgeActToken(event))
+                    break
+                  case 'reasoning.delta':
+                    buildingMessage.categorization = {
+                      speech: buildingMessage.categorization?.speech || (typeof buildingMessage.content === 'string' ? buildingMessage.content : ''),
+                      reasoning: `${buildingMessage.categorization?.reasoning || ''}${event.text}`,
+                    }
+                    updateUI()
+                    break
+                  case 'reasoning.final':
+                    buildingMessage.categorization = {
+                      speech: buildingMessage.categorization?.speech || (typeof buildingMessage.content === 'string' ? buildingMessage.content : ''),
+                      reasoning: event.text,
+                    }
+                    updateUI()
+                    break
+                  case 'assistant.delta':
+                    fullText += event.text
+                    await parser.consume(event.text)
+                    break
+                  case 'assistant.final':
+                    fullText = event.text || fullText
+                    break
+                  case 'tool.call':
+                    toolCallQueue.enqueue({
+                      type: 'tool-call',
+                      toolCall: {
+                        id: event.toolCallId,
+                        toolName: event.name,
+                        args: event.arguments,
+                      } as any,
+                    })
+                    break
+                  case 'tool.result':
+                    toolCallQueue.enqueue({
+                      type: 'tool-call-result',
+                      id: event.toolCallId,
+                      result: event.result,
+                      isError: event.isError,
+                    })
+                    break
+                  case 'permission.request':
+                    await hooks.emitBridgePermissionRequestHooks({
+                      requestId: event.requestId,
+                      toolName: event.toolName,
+                      toolInput: event.toolInput,
+                    }, streamingMessageContext)
+                    await hooks.emitBridgeStateChangedHooks({
+                      state: 'ask_user',
+                      emotion: 'pulse',
+                      toolName: event.toolName,
+                    }, streamingMessageContext)
+                    break
+                  case 'error':
+                    throw new Error(event.message || 'Bridge error')
+                  case 'done':
+                    break
+                }
+              },
+            }),
+            timeoutPromise,
+          ])
+        }
+        else {
+          await Promise.race([
+            llmStore.stream(options.model, options.chatProvider, newMessages as Message[], {
+              headers,
+              tools: options.tools,
+              onStreamEvent: async (event: StreamEvent) => {
+                scheduleStreamTimeout()
+                switch (event.type) {
+                  case 'tool-call':
+                    toolCallQueue.enqueue({
+                      type: 'tool-call',
+                      toolCall: event,
+                    })
 
-                  break
-                case 'tool-result':
-                  toolCallQueue.enqueue({
-                    type: 'tool-call-result',
-                    id: event.toolCallId,
-                    result: event.result,
-                  })
+                    break
+                  case 'tool-result':
+                    toolCallQueue.enqueue({
+                      type: 'tool-call-result',
+                      id: event.toolCallId,
+                      result: event.result,
+                    })
 
-                  break
-                case 'text-delta':
-                  fullText += event.text
-                  await parser.consume(event.text)
-                  break
-                case 'finish':
-                  break
-                case 'error':
-                  throw event.error ?? new Error('Stream error')
-              }
-            },
-          }),
-          timeoutPromise,
-        ])
+                    break
+                  case 'text-delta':
+                    fullText += event.text
+                    await parser.consume(event.text)
+                    break
+                  case 'finish':
+                    break
+                  case 'error':
+                    throw event.error ?? new Error('Stream error')
+                }
+              },
+            }),
+            timeoutPromise,
+          ])
+        }
       }
       finally {
         if (streamTimeoutId) {
@@ -466,6 +600,8 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
     emitAssistantResponseEndHooks: hooks.emitAssistantResponseEndHooks,
     emitAssistantMessageHooks: hooks.emitAssistantMessageHooks,
     emitChatTurnCompleteHooks: hooks.emitChatTurnCompleteHooks,
+    emitBridgeStateChangedHooks: hooks.emitBridgeStateChangedHooks,
+    emitBridgePermissionRequestHooks: hooks.emitBridgePermissionRequestHooks,
 
     onBeforeMessageComposed: hooks.onBeforeMessageComposed,
     onAfterMessageComposed: hooks.onAfterMessageComposed,
@@ -477,5 +613,7 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
     onAssistantResponseEnd: hooks.onAssistantResponseEnd,
     onAssistantMessage: hooks.onAssistantMessage,
     onChatTurnComplete: hooks.onChatTurnComplete,
+    onBridgeStateChanged: hooks.onBridgeStateChanged,
+    onBridgePermissionRequest: hooks.onBridgePermissionRequest,
   }
 })

@@ -5,6 +5,7 @@ import { computed } from 'vue'
 
 import ChatResponsePart from './response-part.vue'
 import ChatToolCallBlock from './tool-call-block.vue'
+import ChatToolResultBlock from './tool-result-block.vue'
 
 import { MarkdownRenderer } from '../../markdown'
 
@@ -61,7 +62,12 @@ const boxClasses = computed(() => [
             :args="slice.toolCall.args"
             class="mb-2"
           />
-          <template v-else-if="slice.type === 'tool-call-result'" />
+          <ChatToolResultBlock
+            v-else-if="slice.type === 'tool-call-result'"
+            :result="slice.result"
+            :is-error="slice.isError"
+            class="mb-2"
+          />
           <template v-else-if="slice.type === 'text'">
             <MarkdownRenderer :content="slice.text" />
           </template>

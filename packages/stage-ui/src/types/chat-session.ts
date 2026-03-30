@@ -5,6 +5,14 @@ export interface ChatSessionMeta {
   userId: string
   characterId: string
   title?: string
+  bridgeState?: {
+    pendingPermission?: {
+      requestId: string
+      toolName: string
+      toolInput: Record<string, unknown>
+      createdAt: number
+    } | null
+  }
   createdAt: number
   updatedAt: number
 }

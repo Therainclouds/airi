@@ -15,6 +15,7 @@ export interface ChatSlicesToolCallResult {
   type: 'tool-call-result'
   id: string
   result?: string | CommonContentPart[]
+  isError?: boolean
 }
 
 export type ChatSlices = ChatSlicesText | ChatSlicesToolCall | ChatSlicesToolCallResult
@@ -24,6 +25,7 @@ export interface ChatAssistantMessage extends AssistantMessage {
   tool_results: {
     id: string
     result?: string | CommonContentPart[]
+    isError?: boolean
   }[]
   categorization?: {
     speech: string

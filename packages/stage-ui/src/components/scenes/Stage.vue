@@ -6,6 +6,7 @@ import type { SpeechProviderWithExtraOptions } from '@xsai-ext/providers/utils'
 import type { UnElevenLabsOptions } from 'unspeech'
 
 import type { EmotionPayload } from '../../constants/emotions'
+import type { BridgeStateChangedHookEvent } from '../../stores/chat/hooks'
 
 import { drizzle } from '@proj-airi/drizzle-duckdb-wasm'
 import { getImportUrlBundles } from '@proj-airi/drizzle-duckdb-wasm/bundles/import-url-browser'
@@ -73,7 +74,7 @@ const { mouthOpenSize } = storeToRefs(useSpeakingStore())
 const { audioContext } = useAudioContext()
 const currentAudioSource = ref<AudioBufferSourceNode>()
 
-const { onBeforeMessageComposed, onBeforeSend, onTokenLiteral, onTokenSpecial, onStreamEnd, onAssistantResponseEnd } = useChatOrchestratorStore()
+const { onBeforeMessageComposed, onBeforeSend, onTokenLiteral, onTokenSpecial, onStreamEnd, onAssistantResponseEnd, onBridgeStateChanged } = useChatOrchestratorStore()
 const chatHookCleanups: Array<() => void> = []
 // WORKAROUND: clear previous handlers on unmount to avoid duplicate calls when this component remounts.
 //             We keep per-hook disposers instead of wiping the global chat hooks to play nicely with
@@ -1002,6 +1003,30 @@ chatHookCleanups.push(onAssistantResponseEnd(async (_message) => {
   // })
 
   // await db.value?.execute(`INSERT INTO memory_test (vec) VALUES (${JSON.stringify(res.embedding)});`)
+}))
+
+chatHookCleanups.push(onBridgeStateChanged(async (event: BridgeStateChangedHookEvent) => {
+  switch (event.state) {
+    case 'think':
+      applyStageActionState('listening')
+      triggerLargeMotion(Emotion.Think, 2200)
+      break
+    case 'tool_use':
+      applyStageActionState('listening')
+      triggerLargeMotion(Emotion.Surprise, 1800)
+      break
+    case 'ask_user':
+      applyStageActionState('listening')
+      triggerLargeMotion(Emotion.Question, 2200)
+      break
+    case 'success':
+      applyStageActionState('done', 1400)
+      break
+    case 'error':
+      applyStageActionState('done', 1800)
+      triggerLargeMotion(Emotion.Awkward, 2000)
+      break
+  }
 }))
 
 onUnmounted(() => {

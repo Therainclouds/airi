@@ -243,6 +243,21 @@ export const useChatSessionStore = defineStore('chat-session', () => {
     void persistSession(sessionId)
   }
 
+  function getSessionMeta(sessionId: string) {
+    return sessionMetas.value[sessionId] ?? null
+  }
+
+  function patchSessionMeta(sessionId: string, patch: Partial<ChatSessionMeta>) {
+    const existing = sessionMetas.value[sessionId]
+    if (!existing)
+      return
+    sessionMetas.value[sessionId] = {
+      ...existing,
+      ...patch,
+    }
+    void persistSession(sessionId)
+  }
+
   function setSessionMessages(sessionId: string, next: ChatHistoryItem[]) {
     sessionMessages.value[sessionId] = next
     void persistSession(sessionId)
@@ -545,6 +560,8 @@ export const useChatSessionStore = defineStore('chat-session', () => {
     ensureSession,
     setSessionMessages,
     persistSessionMessages,
+    getSessionMeta,
+    patchSessionMeta,
     getSessionMessages,
     getSessionGeneration,
     bumpSessionGeneration,

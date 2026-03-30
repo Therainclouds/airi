@@ -3,6 +3,7 @@ import type { ChatProvider } from '@xsai-ext/providers/utils'
 
 import { isStageTamagotchi } from '@proj-airi/stage-shared'
 import { useAudioAnalyzer } from '@proj-airi/stage-ui/composables'
+import { confirmLobsterSkillInstall, downloadLobsterSkill, loadLobsterSkills as fetchLobsterSkills, getLobsterSkillConfig, listLobsterPendingPermissions, respondLobsterPermission, setLobsterSkillConfig, setLobsterSkillEnabled } from '@proj-airi/stage-ui/services/lobster-bridge'
 import { useAudioContext } from '@proj-airi/stage-ui/stores/audio'
 import { useChatOrchestratorStore } from '@proj-airi/stage-ui/stores/chat'
 import { useChatSessionStore } from '@proj-airi/stage-ui/stores/chat/session-store'
@@ -12,7 +13,6 @@ import { useProvidersStore } from '@proj-airi/stage-ui/stores/providers'
 import { useSettings, useSettingsAudioDevice } from '@proj-airi/stage-ui/stores/settings'
 import { BasicTextarea, FieldSelect } from '@proj-airi/ui'
 import { until } from '@vueuse/core'
-import { nanoid } from 'nanoid'
 import { storeToRefs } from 'pinia'
 import { TooltipContent, TooltipProvider, TooltipRoot, TooltipTrigger } from 'reka-ui'
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
@@ -28,8 +28,29 @@ const isListening = ref(false) // Transcription listening state (separate from m
 interface ChatAttachment { type: 'image' | 'file', data: string, mimeType: string, name: string }
 const attachments = ref<ChatAttachment[]>([])
 const fileInput = ref<HTMLInputElement>()
-const lobsterSkills = ref<Array<{ id: string, name: string, enabled?: boolean }>>([])
+const lobsterSkills = ref<Array<{ id: string, name: string, enabled?: boolean, description?: string, version?: string }>>([])
 const selectedLobsterSkillIds = ref<string[]>([])
+const lobsterSkillConfigTexts = ref<Record<string, string>>({})
+const lobsterSkillLoadingIds = ref<string[]>([])
+const lobsterSkillSavingIds = ref<string[]>([])
+const lobsterSkillSource = ref('')
+const lobsterSkillInstallLoading = ref(false)
+const lobsterSkillInstallFeedback = ref<null | { type: 'success' | 'error' | 'info', message: string }>(null)
+const pendingSkillInstall = ref<null | {
+  pendingInstallId: string
+  riskLevel: string
+  riskScore: number
+  skillName: string
+  findings: Array<{ severity: string, dimension: string, description: string, file: string, line?: number }>
+}>(null)
+interface PendingPermissionState {
+  requestId: string
+  toolName: string
+  toolInput: Record<string, unknown>
+  createdAt: number
+}
+const permissionSubmitting = ref(false)
+const permissionStatusMessage = ref<null | { type: 'info' | 'error', message: string }>(null)
 
 function handleFileClick() {
   fileInput.value?.click()
@@ -71,219 +92,292 @@ const { askPermission, startStream } = useSettingsAudioDevice()
 const { enabled, selectedAudioInput, stream, audioInputs } = storeToRefs(useSettingsAudioDevice())
 const chatOrchestrator = useChatOrchestratorStore()
 const chatSession = useChatSessionStore()
-const { ingest, onAfterMessageComposed, discoverToolsCompatibility } = chatOrchestrator
+const { ingest, onAfterMessageComposed, onBridgePermissionRequest, discoverToolsCompatibility } = chatOrchestrator
 const { messages } = storeToRefs(chatSession)
 const { audioContext } = useAudioContext()
 const { t } = useI18n()
-
-function resolveLobsterBaseUrl(providerConfig: Record<string, any>) {
-  const configured = typeof providerConfig?.baseUrl === 'string' ? providerConfig.baseUrl.trim() : ''
-  const baseUrl = configured || 'http://127.0.0.1:19888'
-  return baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl
-}
-
-function normalizeLobsterApiKey(providerConfig: Record<string, any>) {
-  const configured = String(providerConfig?.apiKey || '').trim()
-  return configured || 'lobsterai-agent-default-key'
-}
-
-function normalizeAssistantContent(content: unknown) {
-  if (typeof content === 'string')
-    return content
-  if (Array.isArray(content)) {
-    return content.map((part: any) => {
-      if (typeof part === 'string')
-        return part
-      if (part?.type === 'text' && typeof part.text === 'string')
-        return part.text
-      return ''
-    }).join('')
-  }
-  return ''
-}
-
-function buildLobsterUserContent(text: string, imageAttachments: ChatAttachment[]) {
-  if (imageAttachments.length === 0)
-    return text
-  const parts: Array<any> = [{ type: 'text', text }]
-  for (const attachment of imageAttachments) {
-    parts.push({
-      type: 'image_url',
-      image_url: {
-        url: `data:${attachment.mimeType};base64,${attachment.data}`,
-      },
-    })
-  }
-  return parts
-}
 
 async function loadLobsterSkills() {
   if (activeProvider.value !== 'lobster-agent')
     return
   const providerConfig = providersStore.getProviderConfig(activeProvider.value) as Record<string, any>
-  const baseUrl = resolveLobsterBaseUrl(providerConfig)
-  const apiKey = normalizeLobsterApiKey(providerConfig)
-  const response = await fetch(`${baseUrl}/api/agent/skills`, {
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-    },
-  })
-  const data = await response.json().catch(() => null)
-  if (!response.ok) {
-    throw new Error(String(data?.error || `Skills API error (${response.status})`))
-  }
-  const skills = Array.isArray(data?.skills) ? data.skills : []
-  lobsterSkills.value = skills.map((item: any) => ({
-    id: String(item.id || ''),
-    name: String(item.name || item.id || ''),
-    enabled: !!item.enabled,
-  })).filter((item: { id: string }) => !!item.id)
+  lobsterSkills.value = await fetchLobsterSkills(providerConfig)
   selectedLobsterSkillIds.value = lobsterSkills.value.filter(item => item.enabled).map(item => item.id)
 }
 
-async function uploadLobsterFiles(baseUrl: string, apiKey: string, fileAttachments: ChatAttachment[]) {
-  const uploaded: string[] = []
-  for (const attachment of fileAttachments) {
-    const response = await fetch(`${baseUrl}/api/agent/files/upload`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        name: attachment.name,
-        mimeType: attachment.mimeType,
-        base64Data: attachment.data,
-      }),
-    })
-    const data = await response.json().catch(() => null)
-    if (!response.ok) {
-      throw new Error(String(data?.error || `File upload error (${response.status})`))
-    }
-    const filePath = String(data?.file?.path || '')
-    if (filePath)
-      uploaded.push(filePath)
-  }
-  return uploaded
-}
-
-async function streamLobsterAssistantResponse(response: Response, onDelta: (delta: string) => Promise<void>) {
-  const reader = response.body?.getReader()
-  if (!reader)
+async function ensureLobsterSkillConfigLoaded(skillId: string) {
+  if (!skillId || lobsterSkillConfigTexts.value[skillId] !== undefined || lobsterSkillLoadingIds.value.includes(skillId))
     return
+  lobsterSkillLoadingIds.value = [...lobsterSkillLoadingIds.value, skillId]
+  try {
+    const providerConfig = providersStore.getProviderConfig(activeProvider.value) as Record<string, any>
+    const config = await getLobsterSkillConfig(providerConfig, skillId)
+    lobsterSkillConfigTexts.value = {
+      ...lobsterSkillConfigTexts.value,
+      [skillId]: Object.entries(config).map(([key, value]) => `${key}=${value}`).join('\n'),
+    }
+  }
+  catch (error) {
+    console.error('[ChatArea] Failed to load lobster skill config:', error)
+    lobsterSkillConfigTexts.value = {
+      ...lobsterSkillConfigTexts.value,
+      [skillId]: '',
+    }
+  }
+  finally {
+    lobsterSkillLoadingIds.value = lobsterSkillLoadingIds.value.filter(id => id !== skillId)
+  }
+}
 
-  const decoder = new TextDecoder()
-  let buffer = ''
+function parseSkillConfigText(raw: string) {
+  return Object.fromEntries(
+    raw
+      .split('\n')
+      .map(line => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const separatorIndex = line.indexOf('=')
+        if (separatorIndex < 0)
+          return [line, '']
+        return [line.slice(0, separatorIndex).trim(), line.slice(separatorIndex + 1).trim()]
+      })
+      .filter(([key]) => !!key),
+  ) as Record<string, string>
+}
 
-  while (true) {
-    const { value, done } = await reader.read()
-    if (done)
-      break
-    buffer += decoder.decode(value, { stream: true })
-    const lines = buffer.split('\n')
-    buffer = lines.pop() || ''
+async function saveLobsterSkillConfig(skillId: string) {
+  if (!skillId || lobsterSkillSavingIds.value.includes(skillId))
+    return
+  lobsterSkillSavingIds.value = [...lobsterSkillSavingIds.value, skillId]
+  try {
+    const providerConfig = providersStore.getProviderConfig(activeProvider.value) as Record<string, any>
+    await setLobsterSkillConfig(providerConfig, skillId, parseSkillConfigText(lobsterSkillConfigTexts.value[skillId] || ''))
+  }
+  catch (error) {
+    console.error('[ChatArea] Failed to save lobster skill config:', error)
+  }
+  finally {
+    lobsterSkillSavingIds.value = lobsterSkillSavingIds.value.filter(id => id !== skillId)
+  }
+}
 
-    for (const rawLine of lines) {
-      const line = rawLine.trim()
-      if (!line.startsWith('data:'))
-        continue
-      const payload = line.slice(5).trim()
-      if (!payload || payload === '[DONE]')
-        continue
-      let json: any
-      try {
-        json = JSON.parse(payload)
+async function toggleLobsterSkillEnabled(skillId: string, enabled: boolean) {
+  try {
+    const providerConfig = providersStore.getProviderConfig(activeProvider.value) as Record<string, any>
+    const skills = await setLobsterSkillEnabled(providerConfig, skillId, enabled)
+    lobsterSkills.value = normalizeSkillList(skills)
+  }
+  catch (error) {
+    console.error('[ChatArea] Failed to toggle lobster skill:', error)
+  }
+}
+
+function normalizeSkillList(skills: any[]) {
+  return skills.map((item: any) => ({
+    id: String(item.id || ''),
+    name: String(item.name || item.id || ''),
+    enabled: !!item.enabled,
+    description: typeof item.description === 'string' ? item.description : '',
+    version: typeof item.version === 'string' ? item.version : '',
+  })).filter((item: { id: string }) => !!item.id)
+}
+
+async function handleDownloadLobsterSkill() {
+  if (!lobsterSkillSource.value.trim() || lobsterSkillInstallLoading.value)
+    return
+  lobsterSkillInstallLoading.value = true
+  lobsterSkillInstallFeedback.value = null
+  try {
+    const providerConfig = providersStore.getProviderConfig(activeProvider.value) as Record<string, any>
+    const result = await downloadLobsterSkill(providerConfig, lobsterSkillSource.value.trim())
+    if (result.skills.length > 0) {
+      lobsterSkills.value = normalizeSkillList(result.skills)
+      selectedLobsterSkillIds.value = lobsterSkills.value.filter(item => item.enabled).map(item => item.id)
+      lobsterSkillInstallFeedback.value = {
+        type: 'success',
+        message: `技能已安装，共同步 ${result.skills.length} 个技能。`,
       }
-      catch {
-        continue
+      lobsterSkillSource.value = ''
+      pendingSkillInstall.value = null
+      return
+    }
+    if (result.pendingInstallId && result.auditReport) {
+      pendingSkillInstall.value = {
+        pendingInstallId: result.pendingInstallId,
+        riskLevel: result.auditReport.riskLevel,
+        riskScore: result.auditReport.riskScore,
+        skillName: result.auditReport.skillName,
+        findings: result.auditReport.findings || [],
       }
-      const delta = json?.choices?.[0]?.delta?.content
-      if (typeof delta === 'string' && delta.length > 0) {
-        await onDelta(delta)
+      lobsterSkillInstallFeedback.value = {
+        type: 'info',
+        message: `检测到 ${result.auditReport.riskLevel} 风险，请确认后再安装。`,
       }
     }
   }
+  catch (error) {
+    console.error('[ChatArea] Failed to download lobster skill:', error)
+    lobsterSkillInstallFeedback.value = {
+      type: 'error',
+      message: error instanceof Error ? error.message : '技能安装请求失败',
+    }
+  }
+  finally {
+    lobsterSkillInstallLoading.value = false
+  }
 }
 
-async function sendViaLobsterDirect(textToSend: string, sendingAttachments: ChatAttachment[]) {
-  const providerConfig = providersStore.getProviderConfig(activeProvider.value) as Record<string, any>
-  const apiKey = normalizeLobsterApiKey(providerConfig)
-
-  const baseUrl = resolveLobsterBaseUrl(providerConfig)
-  const sessionId = chatSession.activeSessionId
-  const sessionMessages = chatSession.getSessionMessages(sessionId)
-  const imageAttachments = sendingAttachments.filter(item => item.type === 'image')
-  const fileAttachments = sendingAttachments.filter(item => item.type === 'file')
-  const uploadedFilePaths = await uploadLobsterFiles(baseUrl, apiKey, fileAttachments)
-  const promptWithFiles = uploadedFilePaths.length > 0
-    ? `${textToSend || '请先查看我上传的文件并回答问题。'}\n${uploadedFilePaths.map(filePath => `input file: ${filePath}`).join('\n')}`
-    : textToSend
-  const userContent = buildLobsterUserContent(promptWithFiles, imageAttachments)
-  const hookContext: any = {
-    message: textToSend,
-    composedMessage: textToSend,
-    contexts: [],
-    input: { data: {} },
+async function handleConfirmLobsterSkillInstall(action: 'install' | 'installDisabled' | 'cancel') {
+  if (!pendingSkillInstall.value || lobsterSkillInstallLoading.value)
+    return
+  lobsterSkillInstallLoading.value = true
+  lobsterSkillInstallFeedback.value = null
+  try {
+    const providerConfig = providersStore.getProviderConfig(activeProvider.value) as Record<string, any>
+    const result = await confirmLobsterSkillInstall(providerConfig, pendingSkillInstall.value.pendingInstallId, action)
+    if (result.skills.length > 0) {
+      lobsterSkills.value = normalizeSkillList(result.skills)
+      selectedLobsterSkillIds.value = lobsterSkills.value.filter(item => item.enabled).map(item => item.id)
+      lobsterSkillInstallFeedback.value = {
+        type: 'success',
+        message: action === 'installDisabled'
+          ? `技能已安装，但默认保持禁用。`
+          : `技能已完成安装并刷新列表。`,
+      }
+    }
+    else if (action === 'cancel') {
+      lobsterSkillInstallFeedback.value = {
+        type: 'info',
+        message: '已取消本次技能安装。',
+      }
+    }
+    pendingSkillInstall.value = null
+    lobsterSkillSource.value = ''
   }
-
-  sessionMessages.push({
-    role: 'user',
-    content: userContent as any,
-    createdAt: Date.now(),
-    id: nanoid(),
-  })
-  chatSession.persistSessionMessages(sessionId)
-
-  const payload = {
-    model: activeModel.value,
-    stream: true,
-    skillIds: selectedLobsterSkillIds.value,
-    messages: [{ role: 'user', content: userContent }],
+  catch (error) {
+    console.error('[ChatArea] Failed to confirm lobster skill install:', error)
+    lobsterSkillInstallFeedback.value = {
+      type: 'error',
+      message: error instanceof Error ? error.message : '技能安装确认失败',
+    }
   }
-  await chatOrchestrator.emitBeforeSendHooks(textToSend, hookContext)
+  finally {
+    lobsterSkillInstallLoading.value = false
+  }
+}
 
-  const response = await fetch(`${baseUrl}/v1/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
+function summarizeToolInput(toolInput: Record<string, unknown>) {
+  try {
+    return JSON.stringify(toolInput, null, 2)
+  }
+  catch {
+    return '[toolInput unavailable]'
+  }
+}
+
+function resolvePermissionDisplayName(toolName: string, toolInput: Record<string, unknown>) {
+  const context = typeof toolInput.context === 'object' && toolInput.context ? toolInput.context as Record<string, unknown> : null
+  const requestedToolName = typeof context?.requestedToolName === 'string' ? context.requestedToolName : ''
+  return requestedToolName || toolName || 'unknown-tool'
+}
+
+function updateActiveSessionPendingPermission(next: PendingPermissionState | null) {
+  const activeSessionId = chatSession.activeSessionId
+  if (!activeSessionId)
+    return
+  const meta = chatSession.getSessionMeta(activeSessionId)
+  if (!meta)
+    return
+  chatSession.patchSessionMeta(activeSessionId, {
+    bridgeState: {
+      ...meta.bridgeState,
+      pendingPermission: next,
     },
-    body: JSON.stringify(payload),
   })
-
-  if (!response.ok) {
-    const data = await response.json().catch(() => null)
-    throw new Error(String(data?.error || data?.message || `Lobster API error (${response.status})`))
-  }
-  if (!response.body) {
-    throw new Error('Lobster API returned empty stream body')
-  }
-
-  const assistantMessage: any = {
-    role: 'assistant',
-    content: '',
-    slices: [],
-    tool_results: [],
-    createdAt: Date.now(),
-    id: nanoid(),
-  }
-  sessionMessages.push(assistantMessage)
-  chatSession.persistSessionMessages(sessionId)
-
-  let assistantContent = ''
-  await streamLobsterAssistantResponse(response, async (delta) => {
-    assistantContent += delta
-    assistantMessage.content = assistantContent
-    assistantMessage.slices = [{ type: 'text', text: assistantContent }]
-    chatSession.persistSessionMessages(sessionId)
-    await chatOrchestrator.emitTokenLiteralHooks(delta, hookContext)
-  })
-  assistantMessage.content = normalizeAssistantContent(assistantContent)
-  assistantMessage.slices = [{ type: 'text', text: assistantMessage.content }]
-  chatSession.persistSessionMessages(sessionId)
-  await chatOrchestrator.emitStreamEndHooks(hookContext)
-  await chatOrchestrator.emitAssistantResponseEndHooks(assistantMessage.content, hookContext)
 }
+
+const pendingPermission = computed<PendingPermissionState | null>(() => {
+  const activeSessionId = chatSession.activeSessionId
+  if (!activeSessionId)
+    return null
+  const meta = chatSession.getSessionMeta(activeSessionId)
+  return meta?.bridgeState?.pendingPermission ?? null
+})
+
+const pendingPermissionCreatedLabel = computed(() => {
+  if (!pendingPermission.value)
+    return ''
+  return new Date(pendingPermission.value.createdAt).toLocaleTimeString()
+})
+
+async function syncPendingPermissionState() {
+  if (activeProvider.value !== 'lobster-agent') {
+    permissionStatusMessage.value = null
+    return
+  }
+  try {
+    const providerConfig = providersStore.getProviderConfig(activeProvider.value) as Record<string, any>
+    const permissions = await listLobsterPendingPermissions(providerConfig, chatSession.activeSessionId)
+    const currentRequestId = pendingPermission.value?.requestId || ''
+    const matched = currentRequestId
+      ? permissions.find((item: { requestId: string }) => item.requestId === currentRequestId) || null
+      : null
+    const resolved = matched || permissions[0] || null
+
+    if (resolved) {
+      updateActiveSessionPendingPermission({
+        requestId: resolved.requestId,
+        toolName: resolved.toolName,
+        toolInput: resolved.toolInput,
+        createdAt: resolved.createdAt,
+      })
+      permissionStatusMessage.value = resolved.expiresAt
+        ? { type: 'info', message: `请求有效，服务端过期时间 ${new Date(resolved.expiresAt).toLocaleTimeString()}` }
+        : null
+      return
+    }
+
+    if (pendingPermission.value) {
+      permissionStatusMessage.value = { type: 'error', message: '该权限请求已过期、已失效或已被处理。' }
+      updateActiveSessionPendingPermission(null)
+    }
+    else {
+      permissionStatusMessage.value = null
+    }
+  }
+  catch (error) {
+    console.error('[ChatArea] Failed to sync lobster permission state:', error)
+    permissionStatusMessage.value = { type: 'error', message: '无法确认权限请求状态，请重新触发。' }
+  }
+}
+
+async function handlePermissionDecision(decision: 'allow' | 'deny') {
+  if (!pendingPermission.value || permissionSubmitting.value)
+    return
+  permissionSubmitting.value = true
+  try {
+    const providerConfig = providersStore.getProviderConfig(activeProvider.value) as Record<string, any>
+    await respondLobsterPermission(providerConfig, chatSession.activeSessionId, pendingPermission.value.requestId, decision)
+    updateActiveSessionPendingPermission(null)
+    permissionStatusMessage.value = null
+  }
+  catch (error) {
+    console.error('[ChatArea] Failed to respond lobster permission:', error)
+  }
+  finally {
+    permissionSubmitting.value = false
+  }
+}
+
+onBridgePermissionRequest(async (event) => {
+  updateActiveSessionPendingPermission({
+    requestId: event.requestId,
+    toolName: event.toolName,
+    toolInput: event.toolInput,
+    createdAt: Date.now(),
+  })
+  permissionStatusMessage.value = null
+})
 
 // Transcription pipeline
 const hearingStore = useHearingStore()
@@ -365,20 +459,23 @@ async function handleSend() {
   attachments.value = []
 
   try {
-    if (activeProvider.value === 'lobster-agent') {
-      await sendViaLobsterDirect(textToSend, sendingAttachments)
-    }
-    else {
-      const providerConfig = providersStore.getProviderConfig(activeProvider.value)
-      await ingest(textToSend, {
-        chatProvider: await providersStore.getProviderInstance(activeProvider.value) as ChatProvider,
-        model: activeModel.value,
-        providerConfig,
-        attachments: sendingAttachments
-          .filter((item): item is ChatAttachment & { type: 'image' } => item.type === 'image')
-          .map(({ data, mimeType }) => ({ type: 'image' as const, data, mimeType })),
-      })
-    }
+    const providerConfig = providersStore.getProviderConfig(activeProvider.value)
+    await ingest(textToSend, {
+      chatProvider: await providersStore.getProviderInstance(activeProvider.value) as ChatProvider,
+      model: activeModel.value,
+      providerConfig,
+      attachments: sendingAttachments
+        .filter((item): item is ChatAttachment & { type: 'image' } => item.type === 'image')
+        .map(({ data, mimeType }) => ({ type: 'image' as const, data, mimeType })),
+      lobster: activeProvider.value === 'lobster-agent'
+        ? {
+            skillIds: selectedLobsterSkillIds.value,
+            fileAttachments: sendingAttachments
+              .filter((item): item is ChatAttachment & { type: 'file' } => item.type === 'file')
+              .map(({ data, mimeType, name }) => ({ type: 'file' as const, data, mimeType, name })),
+          }
+        : undefined,
+    })
   }
   catch (error) {
     messageInput.value = textToSend
@@ -408,11 +505,22 @@ watch([activeProvider, activeModel], async () => {
   }
 })
 
+watch(selectedLobsterSkillIds, async (ids) => {
+  if (activeProvider.value !== 'lobster-agent')
+    return
+  await Promise.all(ids.map(async id => await ensureLobsterSkillConfigLoaded(id)))
+}, { immediate: true })
+
+watch([() => chatSession.activeSessionId, pendingPermission, activeProvider], async () => {
+  await syncPendingPermissionState()
+}, { immediate: true })
+
 onAfterMessageComposed(async () => {
 })
 
 const { startAnalyzer, stopAnalyzer, volumeLevel } = useAudioAnalyzer()
 const normalizedVolume = computed(() => Math.min(1, Math.max(0, (volumeLevel.value ?? 0) / 100)))
+const selectedLobsterSkills = computed(() => lobsterSkills.value.filter(skill => selectedLobsterSkillIds.value.includes(skill.id)))
 let analyzerSource: MediaStreamAudioSourceNode | undefined
 
 function teardownAnalyzer() {
@@ -718,6 +826,178 @@ watch(autoSendEnabled, (enabled) => {
         >
           {{ skill.name }}
         </button>
+      </div>
+
+      <div v-if="activeProvider === 'lobster-agent'" class="mx-4 mb-2 border border-primary-200/70 rounded-xl bg-primary-50/40 p-3 shadow-sm dark:border-primary-800/40 dark:bg-primary-950/20">
+        <div class="text-sm text-primary-800 font-semibold dark:text-primary-100">
+          安装 Lobster 技能
+        </div>
+        <div class="mt-1 text-[11px] text-primary-900/70 dark:text-primary-100/70">
+          支持 GitHub 仓库、zip、本地目录或 npm package spec
+        </div>
+        <div class="mt-2 flex gap-2">
+          <input
+            v-model="lobsterSkillSource"
+            class="w-full border border-primary-200 rounded-lg bg-white/80 px-3 py-2 text-xs outline-none dark:border-primary-800/50 dark:bg-neutral-900/60"
+            placeholder="例如：owner/repo 或 https://... 或 本地目录"
+          >
+          <button
+            class="rounded-lg bg-primary-500 px-3 py-2 text-xs text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
+            :disabled="lobsterSkillInstallLoading || !lobsterSkillSource.trim()"
+            @click="handleDownloadLobsterSkill"
+          >
+            {{ lobsterSkillInstallLoading ? '处理中...' : '安装' }}
+          </button>
+        </div>
+      </div>
+
+      <div
+        v-if="lobsterSkillInstallFeedback"
+        class="mx-4 mb-2 rounded-xl p-3 text-xs shadow-sm"
+        :class="lobsterSkillInstallFeedback.type === 'success'
+          ? 'border border-emerald-300 bg-emerald-50/90 text-emerald-900 dark:border-emerald-700/60 dark:bg-emerald-950/30 dark:text-emerald-100'
+          : lobsterSkillInstallFeedback.type === 'error'
+            ? 'border border-red-300 bg-red-50/90 text-red-900 dark:border-red-700/60 dark:bg-red-950/30 dark:text-red-100'
+            : 'border border-primary-300 bg-primary-50/90 text-primary-900 dark:border-primary-700/60 dark:bg-primary-950/30 dark:text-primary-100'"
+      >
+        {{ lobsterSkillInstallFeedback.message }}
+      </div>
+
+      <div v-if="pendingSkillInstall" class="mx-4 mb-2 border border-rose-300 rounded-xl bg-rose-50/90 p-3 text-sm shadow-sm dark:border-rose-700/60 dark:bg-rose-950/30">
+        <div class="mb-1 flex items-center justify-between gap-2 text-rose-800 dark:text-rose-200">
+          <span class="font-semibold">技能安装需要风险确认</span>
+          <span class="rounded-full bg-rose-500/10 px-2 py-0.5 text-[11px]">{{ pendingSkillInstall.riskLevel }} · {{ pendingSkillInstall.riskScore }}</span>
+        </div>
+        <div class="text-xs text-rose-900/80 dark:text-rose-100/80">
+          技能：{{ pendingSkillInstall.skillName }}
+        </div>
+        <div v-if="pendingSkillInstall.findings.length > 0" class="mt-2 max-h-32 overflow-auto rounded-lg bg-black/5 p-2 text-[11px] text-neutral-700 dark:bg-white/5 dark:text-neutral-200">
+          <div
+            v-for="(finding, index) in pendingSkillInstall.findings.slice(0, 6)"
+            :key="`${finding.file}-${index}`"
+            class="mb-1"
+          >
+            [{{ finding.severity }}] {{ finding.dimension }} - {{ finding.description }} ({{ finding.file }}<span v-if="finding.line">:{{ finding.line }}</span>)
+          </div>
+        </div>
+        <div class="mt-3 flex gap-2">
+          <button
+            class="rounded-lg bg-emerald-500 px-3 py-1.5 text-xs text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
+            :disabled="lobsterSkillInstallLoading"
+            @click="handleConfirmLobsterSkillInstall('install')"
+          >
+            继续安装
+          </button>
+          <button
+            class="rounded-lg bg-amber-500 px-3 py-1.5 text-xs text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
+            :disabled="lobsterSkillInstallLoading"
+            @click="handleConfirmLobsterSkillInstall('installDisabled')"
+          >
+            安装但禁用
+          </button>
+          <button
+            class="rounded-lg bg-red-500 px-3 py-1.5 text-xs text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
+            :disabled="lobsterSkillInstallLoading"
+            @click="handleConfirmLobsterSkillInstall('cancel')"
+          >
+            取消
+          </button>
+        </div>
+      </div>
+
+      <div v-if="activeProvider === 'lobster-agent' && selectedLobsterSkills.length > 0" class="mx-4 mb-2 flex flex-col gap-2">
+        <div
+          v-for="skill in selectedLobsterSkills"
+          :key="`skill-config-${skill.id}`"
+          class="border border-primary-200/70 rounded-xl bg-primary-50/60 p-3 shadow-sm dark:border-primary-800/40 dark:bg-primary-950/20"
+        >
+          <div class="flex items-center justify-between gap-2">
+            <div>
+              <div class="text-sm text-primary-800 font-semibold dark:text-primary-100">
+                {{ skill.name }}
+              </div>
+              <div v-if="skill.description || skill.version" class="text-[11px] text-primary-800/70 dark:text-primary-200/70">
+                {{ skill.description || 'Lobster Skill' }}<span v-if="skill.version"> · {{ skill.version }}</span>
+              </div>
+            </div>
+            <button
+              class="rounded-lg px-2 py-1 text-[11px] transition-colors"
+              :class="skill.enabled ? 'bg-emerald-500 text-white' : 'bg-neutral-200 text-neutral-700 dark:bg-neutral-700 dark:text-neutral-100'"
+              @click="toggleLobsterSkillEnabled(skill.id, !skill.enabled)"
+            >
+              {{ skill.enabled ? '已启用' : '未启用' }}
+            </button>
+          </div>
+          <div class="mt-2 text-[11px] text-primary-900/70 dark:text-primary-100/70">
+            配置格式：每行一个 KEY=VALUE
+          </div>
+          <textarea
+            v-model="lobsterSkillConfigTexts[skill.id]"
+            class="mt-2 min-h-24 w-full border border-primary-200 rounded-lg bg-white/80 p-2 text-xs outline-none dark:border-primary-800/50 dark:bg-neutral-900/60"
+            :placeholder="lobsterSkillLoadingIds.includes(skill.id) ? '正在加载配置...' : '例如：API_KEY=xxx'"
+          />
+          <div class="mt-2 flex justify-end">
+            <button
+              class="rounded-lg bg-primary-500 px-3 py-1.5 text-xs text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
+              :disabled="lobsterSkillLoadingIds.includes(skill.id) || lobsterSkillSavingIds.includes(skill.id)"
+              @click="saveLobsterSkillConfig(skill.id)"
+            >
+              {{ lobsterSkillSavingIds.includes(skill.id) ? '保存中...' : '保存配置' }}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div
+        v-if="permissionStatusMessage && activeProvider === 'lobster-agent'"
+        class="mx-4 mb-2 rounded-xl p-3 text-xs shadow-sm"
+        :class="permissionStatusMessage.type === 'error'
+          ? 'border border-red-300 bg-red-50/90 text-red-900 dark:border-red-700/60 dark:bg-red-950/30 dark:text-red-100'
+          : 'border border-amber-300 bg-amber-50/90 text-amber-900 dark:border-amber-700/60 dark:bg-amber-950/30 dark:text-amber-100'"
+      >
+        {{ permissionStatusMessage.message }}
+      </div>
+
+      <div v-if="pendingPermission && activeProvider === 'lobster-agent'" class="mx-4 mb-2 border border-amber-300 rounded-xl bg-amber-50/90 p-3 text-sm shadow-sm dark:border-amber-700/60 dark:bg-amber-950/30">
+        <div class="mb-1 flex items-center justify-between gap-2 text-amber-800 dark:text-amber-200">
+          <div class="flex items-center gap-2">
+            <div class="i-ph:warning-circle h-4 w-4" />
+            <span class="font-semibold">Lobster 权限确认</span>
+          </div>
+          <span class="rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px]">
+            会话 {{ chatSession.activeSessionId.slice(0, 8) }}
+          </span>
+        </div>
+        <div class="text-xs text-amber-900/80 dark:text-amber-100/80">
+          工具：{{ resolvePermissionDisplayName(pendingPermission.toolName, pendingPermission.toolInput) }}
+        </div>
+        <div class="mt-1 text-[11px] text-amber-900/70 dark:text-amber-100/70">
+          请求创建于 {{ pendingPermissionCreatedLabel }}，仅对当前会话有效；切换或刷新后会按会话恢复，失效请求默认拒绝。
+        </div>
+        <pre class="mt-2 max-h-32 overflow-auto whitespace-pre-wrap rounded-lg bg-black/5 p-2 text-[11px] text-neutral-700 dark:bg-white/5 dark:text-neutral-200">{{ summarizeToolInput(pendingPermission.toolInput) }}</pre>
+        <div class="mt-3 flex flex-wrap gap-2">
+          <button
+            class="rounded-lg bg-emerald-500 px-3 py-1.5 text-xs text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
+            :disabled="permissionSubmitting"
+            @click="handlePermissionDecision('allow')"
+          >
+            允许
+          </button>
+          <button
+            class="rounded-lg bg-red-500 px-3 py-1.5 text-xs text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
+            :disabled="permissionSubmitting"
+            @click="handlePermissionDecision('deny')"
+          >
+            拒绝
+          </button>
+          <button
+            class="rounded-lg bg-neutral-500 px-3 py-1.5 text-xs text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
+            :disabled="permissionSubmitting"
+            @click="handlePermissionDecision('deny')"
+          >
+            关闭并拒绝
+          </button>
+        </div>
       </div>
 
       <!-- Bottom-left action button: Microphone -->

@@ -2,6 +2,19 @@ import type { ToolMessage } from '@xsai/shared-chat'
 
 import type { ChatStreamEventContext, StreamingAssistantMessage } from '../../types/chat'
 
+export interface BridgeStateChangedHookEvent {
+  state: string
+  emotion: string
+  toolName?: string
+  reason?: string
+}
+
+export interface BridgePermissionRequestHookEvent {
+  requestId: string
+  toolName: string
+  toolInput: Record<string, unknown>
+}
+
 export interface ChatHookRegistry {
   onBeforeMessageComposed: (cb: (message: string, context: Omit<ChatStreamEventContext, 'composedMessage'>) => Promise<void>) => () => void
   onAfterMessageComposed: (cb: (message: string, context: ChatStreamEventContext) => Promise<void>) => () => void
@@ -13,6 +26,8 @@ export interface ChatHookRegistry {
   onAssistantResponseEnd: (cb: (message: string, context: ChatStreamEventContext) => Promise<void>) => () => void
   onAssistantMessage: (cb: (message: StreamingAssistantMessage, messageText: string, context: ChatStreamEventContext) => Promise<void>) => () => void
   onChatTurnComplete: (cb: (chat: { output: StreamingAssistantMessage, outputText: string, toolCalls: ToolMessage[] }, context: ChatStreamEventContext) => Promise<void>) => () => void
+  onBridgeStateChanged: (cb: (event: BridgeStateChangedHookEvent, context: ChatStreamEventContext) => Promise<void>) => () => void
+  onBridgePermissionRequest: (cb: (event: BridgePermissionRequestHookEvent, context: ChatStreamEventContext) => Promise<void>) => () => void
   emitBeforeMessageComposedHooks: (message: string, context: Omit<ChatStreamEventContext, 'composedMessage'>) => Promise<void>
   emitAfterMessageComposedHooks: (message: string, context: ChatStreamEventContext) => Promise<void>
   emitBeforeSendHooks: (message: string, context: ChatStreamEventContext) => Promise<void>
@@ -23,6 +38,8 @@ export interface ChatHookRegistry {
   emitAssistantResponseEndHooks: (message: string, context: ChatStreamEventContext) => Promise<void>
   emitAssistantMessageHooks: (message: StreamingAssistantMessage, messageText: string, context: ChatStreamEventContext) => Promise<void>
   emitChatTurnCompleteHooks: (chat: { output: StreamingAssistantMessage, outputText: string, toolCalls: ToolMessage[] }, context: ChatStreamEventContext) => Promise<void>
+  emitBridgeStateChangedHooks: (event: BridgeStateChangedHookEvent, context: ChatStreamEventContext) => Promise<void>
+  emitBridgePermissionRequestHooks: (event: BridgePermissionRequestHookEvent, context: ChatStreamEventContext) => Promise<void>
   clearHooks: () => void
 }
 
@@ -37,6 +54,8 @@ export function createChatHooks(): ChatHookRegistry {
   const onAssistantResponseEndHooks: Array<(message: string, context: ChatStreamEventContext) => Promise<void>> = []
   const onAssistantMessageHooks: Array<(message: StreamingAssistantMessage, messageText: string, context: ChatStreamEventContext) => Promise<void>> = []
   const onChatTurnCompleteHooks: Array<(chat: { output: StreamingAssistantMessage, outputText: string, toolCalls: ToolMessage[] }, context: ChatStreamEventContext) => Promise<void>> = []
+  const onBridgeStateChangedHooks: Array<(event: BridgeStateChangedHookEvent, context: ChatStreamEventContext) => Promise<void>> = []
+  const onBridgePermissionRequestHooks: Array<(event: BridgePermissionRequestHookEvent, context: ChatStreamEventContext) => Promise<void>> = []
 
   function onBeforeMessageComposed(cb: (message: string, context: Omit<ChatStreamEventContext, 'composedMessage'>) => Promise<void>) {
     onBeforeMessageComposedHooks.push(cb)
@@ -128,6 +147,24 @@ export function createChatHooks(): ChatHookRegistry {
     }
   }
 
+  function onBridgeStateChanged(cb: (event: BridgeStateChangedHookEvent, context: ChatStreamEventContext) => Promise<void>) {
+    onBridgeStateChangedHooks.push(cb)
+    return () => {
+      const index = onBridgeStateChangedHooks.indexOf(cb)
+      if (index >= 0)
+        onBridgeStateChangedHooks.splice(index, 1)
+    }
+  }
+
+  function onBridgePermissionRequest(cb: (event: BridgePermissionRequestHookEvent, context: ChatStreamEventContext) => Promise<void>) {
+    onBridgePermissionRequestHooks.push(cb)
+    return () => {
+      const index = onBridgePermissionRequestHooks.indexOf(cb)
+      if (index >= 0)
+        onBridgePermissionRequestHooks.splice(index, 1)
+    }
+  }
+
   function clearHooks() {
     onBeforeMessageComposedHooks.length = 0
     onAfterMessageComposedHooks.length = 0
@@ -139,6 +176,8 @@ export function createChatHooks(): ChatHookRegistry {
     onAssistantResponseEndHooks.length = 0
     onAssistantMessageHooks.length = 0
     onChatTurnCompleteHooks.length = 0
+    onBridgeStateChangedHooks.length = 0
+    onBridgePermissionRequestHooks.length = 0
   }
 
   async function runHookSafely(action: () => Promise<void>) {
@@ -200,6 +239,16 @@ export function createChatHooks(): ChatHookRegistry {
       await runHookSafely(async () => await hook(chat, context))
   }
 
+  async function emitBridgeStateChangedHooks(event: BridgeStateChangedHookEvent, context: ChatStreamEventContext) {
+    for (const hook of onBridgeStateChangedHooks)
+      await runHookSafely(async () => await hook(event, context))
+  }
+
+  async function emitBridgePermissionRequestHooks(event: BridgePermissionRequestHookEvent, context: ChatStreamEventContext) {
+    for (const hook of onBridgePermissionRequestHooks)
+      await runHookSafely(async () => await hook(event, context))
+  }
+
   return {
     onBeforeMessageComposed,
     onAfterMessageComposed,
@@ -211,6 +260,8 @@ export function createChatHooks(): ChatHookRegistry {
     onAssistantResponseEnd,
     onAssistantMessage,
     onChatTurnComplete,
+    onBridgeStateChanged,
+    onBridgePermissionRequest,
     emitBeforeMessageComposedHooks,
     emitAfterMessageComposedHooks,
     emitBeforeSendHooks,
@@ -221,6 +272,8 @@ export function createChatHooks(): ChatHookRegistry {
     emitAssistantResponseEndHooks,
     emitAssistantMessageHooks,
     emitChatTurnCompleteHooks,
+    emitBridgeStateChangedHooks,
+    emitBridgePermissionRequestHooks,
     clearHooks,
   }
 }
