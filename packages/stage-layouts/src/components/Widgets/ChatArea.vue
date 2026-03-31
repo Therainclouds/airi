@@ -1,20 +1,13 @@
 <script setup lang="ts">
-import type {
-  LobsterBridgeEvent,
-} from '@proj-airi/stage-ui/types/lobster-bridge'
 import type { ChatProvider } from '@xsai-ext/providers/utils'
 
 import { isStageTamagotchi } from '@proj-airi/stage-shared'
 import { useAudioAnalyzer, useLobsterSkills } from '@proj-airi/stage-ui/composables'
 import {
-  bindSession,
-  buildUserContent,
   listPendingPermissions,
   normalizeApiKey,
   normalizeBaseUrl,
   respondPermission,
-  streamChat,
-  uploadFiles,
 } from '@proj-airi/stage-ui/services/lobster-bridge'
 import { useAudioContext } from '@proj-airi/stage-ui/stores/audio'
 import { useChatOrchestratorStore } from '@proj-airi/stage-ui/stores/chat'
@@ -23,10 +16,8 @@ import { useConsciousnessStore } from '@proj-airi/stage-ui/stores/modules/consci
 import { useHearingSpeechInputPipeline, useHearingStore } from '@proj-airi/stage-ui/stores/modules/hearing'
 import { useProvidersStore } from '@proj-airi/stage-ui/stores/providers'
 import { useSettings, useSettingsAudioDevice } from '@proj-airi/stage-ui/stores/settings'
-import { LobsterBridgeError } from '@proj-airi/stage-ui/types/lobster-bridge'
 import { BasicTextarea } from '@proj-airi/ui'
 import { until } from '@vueuse/core'
-import { nanoid } from 'nanoid'
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -90,7 +81,7 @@ const { askPermission, startStream } = useSettingsAudioDevice()
 const { enabled, selectedAudioInput, stream, audioInputs } = storeToRefs(useSettingsAudioDevice())
 const chatOrchestrator = useChatOrchestratorStore()
 const chatSession = useChatSessionStore()
-const { ingest, onAfterMessageComposed, discoverToolsCompatibility } = chatOrchestrator
+const { ingest, onAfterMessageComposed, discoverToolsCompatibility, onBridgePermissionRequest, onBridgeStateChanged } = chatOrchestrator
 const { messages, activeSessionId } = storeToRefs(chatSession)
 const { audioContext } = useAudioContext()
 const { t } = useI18n()
@@ -117,21 +108,6 @@ function getLobsterConnection() {
   }
 }
 
-function normalizeAssistantContent(content: unknown) {
-  if (typeof content === 'string')
-    return content
-  if (Array.isArray(content)) {
-    return content.map((part: any) => {
-      if (typeof part === 'string')
-        return part
-      if (part?.type === 'text' && typeof part.text === 'string')
-        return part.text
-      return ''
-    }).join('')
-  }
-  return ''
-}
-
 async function loadLobsterSkills() {
   if (activeProvider.value !== 'lobster-agent')
     return
@@ -144,11 +120,6 @@ function syncSelectedLobsterSkillIds() {
   const retained = selectedLobsterSkillIds.value.filter(id => availableIds.has(id))
   const defaults = lobsterSkills.value.filter(skill => skill.enabled).map(skill => skill.id)
   selectedLobsterSkillIds.value = Array.from(new Set(retained.length > 0 ? retained : defaults))
-}
-
-async function ensureLobsterBridgeSession(sessionId: string) {
-  const { baseUrl, apiKey } = getLobsterConnection()
-  await bindSession(baseUrl, apiKey, sessionId)
 }
 
 function replacePendingLobsterPermissions(permissions: Array<{
@@ -229,178 +200,6 @@ async function respondToLobsterPermission(permission: {
     await syncPendingLobsterPermissions().catch(() => {})
     throw error
   }
-}
-
-function syncAssistantMessageState(message: any, assistantContent: string, reasoningContent: string) {
-  message.content = normalizeAssistantContent(assistantContent)
-  const textSlice = message.slices.find((slice: any) => slice.type === 'text')
-  if (textSlice) {
-    textSlice.text = message.content
-  }
-  else if (message.content) {
-    message.slices.push({ type: 'text', text: message.content })
-  }
-  if (reasoningContent) {
-    message.categorization = {
-      speech: message.content,
-      reasoning: reasoningContent,
-    }
-  }
-}
-
-async function sendViaLobsterBridge(textToSend: string, sendingAttachments: ChatAttachment[]) {
-  const { baseUrl, apiKey } = getLobsterConnection()
-  const sessionId = activeSessionId.value
-  const sessionMessages = chatSession.getSessionMessages(sessionId)
-  const imageAttachments = sendingAttachments.filter(item => item.type === 'image')
-  const fileAttachments = sendingAttachments.filter(item => item.type === 'file')
-
-  await ensureLobsterBridgeSession(sessionId)
-  const uploadedFileIds = await uploadFiles(baseUrl, apiKey, sessionId, fileAttachments as Array<{ type: 'file', data: string, mimeType: string, name: string }>)
-  const userContent = buildUserContent(textToSend, imageAttachments.map(a => ({ data: a.data, mimeType: a.mimeType })))
-
-  const hookContext: any = {
-    message: textToSend,
-    composedMessage: textToSend,
-    contexts: [],
-    input: { data: {} },
-  }
-
-  sessionMessages.push({
-    role: 'user',
-    content: userContent as any,
-    createdAt: Date.now(),
-    id: nanoid(),
-  })
-  chatSession.persistSessionMessages(sessionId)
-
-  const payload = {
-    airiSessionId: sessionId,
-    model: activeModel.value,
-    stream: true as const,
-    fileIds: uploadedFileIds,
-    skillIds: selectedLobsterSkillIds.value,
-    messages: [{ role: 'user' as const, content: userContent }],
-  }
-  await chatOrchestrator.emitBeforeSendHooks(textToSend, hookContext)
-
-  const assistantMessage: any = {
-    role: 'assistant',
-    content: '',
-    slices: [],
-    tool_results: [],
-    createdAt: Date.now(),
-    id: nanoid(),
-  }
-  sessionMessages.push(assistantMessage)
-  chatSession.persistSessionMessages(sessionId)
-
-  let assistantContent = ''
-  let reasoningContent = ''
-
-  try {
-    for await (const event of streamChat({
-      baseUrl,
-      apiKey,
-      request: payload,
-      onStateChange: (_state: string) => {
-        // Phase 2: map to animation states
-      },
-      onPermissionRequest: (permPayload: {
-        requestId: string
-        capabilityToken: string
-        toolName: string
-        toolInput: Record<string, unknown>
-        expiresAt: number
-      }) => {
-        upsertPendingLobsterPermission(permPayload)
-      },
-    })) {
-      switch ((event as LobsterBridgeEvent).type) {
-        case 'assistant.delta': {
-          const delta = (event as any).payload?.delta ?? ''
-          if (!delta)
-            break
-          assistantContent += delta
-          syncAssistantMessageState(assistantMessage, assistantContent, reasoningContent)
-          chatSession.persistSessionMessages(sessionId)
-          await chatOrchestrator.emitTokenLiteralHooks(delta, hookContext)
-          break
-        }
-        case 'assistant.final': {
-          assistantContent = (event as any).payload?.content ?? assistantContent
-          syncAssistantMessageState(assistantMessage, assistantContent, reasoningContent)
-          chatSession.persistSessionMessages(sessionId)
-          break
-        }
-        case 'reasoning.delta': {
-          const delta = (event as any).payload?.delta ?? ''
-          if (!delta)
-            break
-          reasoningContent += delta
-          syncAssistantMessageState(assistantMessage, assistantContent, reasoningContent)
-          chatSession.persistSessionMessages(sessionId)
-          break
-        }
-        case 'reasoning.final': {
-          reasoningContent = (event as any).payload?.content ?? reasoningContent
-          syncAssistantMessageState(assistantMessage, assistantContent, reasoningContent)
-          chatSession.persistSessionMessages(sessionId)
-          break
-        }
-        case 'tool.call': {
-          const toolCallEvent = event as any
-          assistantMessage.slices.push({
-            type: 'tool-call',
-            toolCall: {
-              toolName: String(toolCallEvent.payload?.name ?? ''),
-              args: typeof toolCallEvent.payload?.input === 'string'
-                ? toolCallEvent.payload.input
-                : JSON.stringify(toolCallEvent.payload?.input ?? {}, null, 2),
-              toolCallId: String(toolCallEvent.payload?.id ?? nanoid()),
-              toolCallType: 'function',
-            },
-          })
-          chatSession.persistSessionMessages(sessionId)
-          break
-        }
-        case 'tool.result': {
-          const toolResultEvent = event as any
-          const toolCallId = String(toolResultEvent.payload?.id ?? nanoid())
-          const result = typeof toolResultEvent.payload?.result === 'string'
-            ? toolResultEvent.payload.result
-            : JSON.stringify(toolResultEvent.payload?.result ?? {}, null, 2)
-          assistantMessage.tool_results = [
-            ...assistantMessage.tool_results.filter((item: any) => item.id !== toolCallId),
-            { id: toolCallId, result },
-          ]
-          assistantMessage.slices.push({
-            type: 'tool-call-result',
-            id: toolCallId,
-            result,
-          })
-          chatSession.persistSessionMessages(sessionId)
-          break
-        }
-        case 'done':
-        case 'session.bound':
-        case 'state.changed':
-          break
-      }
-    }
-  }
-  catch (error: unknown) {
-    if (error instanceof LobsterBridgeError) {
-      throw new Error(error.message)
-    }
-    throw error
-  }
-
-  syncAssistantMessageState(assistantMessage, assistantContent, reasoningContent)
-  chatSession.persistSessionMessages(sessionId)
-  await syncPendingLobsterPermissions().catch(() => {})
-  await chatOrchestrator.emitStreamEndHooks(hookContext)
-  await chatOrchestrator.emitAssistantResponseEndHooks(assistantMessage.content, hookContext)
 }
 
 async function handleLobsterPermissionDecision(permission: {
@@ -500,11 +299,27 @@ async function handleSend() {
   attachments.value = []
 
   try {
+    const providerConfig = providersStore.getProviderConfig(activeProvider.value)
+
     if (activeProvider.value === 'lobster-agent') {
-      await sendViaLobsterBridge(textToSend, sendingAttachments)
+      const { baseUrl, apiKey } = getLobsterConnection()
+      const fileAttachments = sendingAttachments.filter((item): item is ChatAttachment & { type: 'file' } => item.type === 'file')
+      await ingest(textToSend, {
+        chatProvider: await providersStore.getProviderInstance(activeProvider.value) as ChatProvider,
+        model: activeModel.value,
+        providerConfig,
+        attachments: sendingAttachments
+          .filter((item): item is ChatAttachment & { type: 'image' } => item.type === 'image')
+          .map(({ data, mimeType }) => ({ type: 'image' as const, data, mimeType })),
+        bridgeOptions: {
+          baseUrl,
+          apiKey,
+          fileAttachments,
+          skillIds: selectedLobsterSkillIds.value,
+        },
+      })
     }
     else {
-      const providerConfig = providersStore.getProviderConfig(activeProvider.value)
       await ingest(textToSend, {
         chatProvider: await providersStore.getProviderInstance(activeProvider.value) as ChatProvider,
         model: activeModel.value,
@@ -593,6 +408,19 @@ async function setupAnalyzer() {
 watch([hearingTooltipOpen, enabled, stream], () => {
   setupAnalyzer()
 }, { immediate: true })
+
+// Bridge hook listeners for permission requests and state changes
+onBridgePermissionRequest(async (permission) => {
+  upsertPendingLobsterPermission(permission)
+})
+
+onBridgeStateChanged(async (_state) => {
+  // Phase 2.5: map to animation states in Stage.vue
+  // For now, just sync permissions on state changes
+  if (_state === 'ask_user' || _state === 'success' || _state === 'error') {
+    await syncPendingLobsterPermissions().catch(() => {})
+  }
+})
 
 onUnmounted(() => {
   teardownAnalyzer()

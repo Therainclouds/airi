@@ -21,6 +21,13 @@ import { useChatStreamStore } from './chat/stream-store'
 import { useLLM } from './llm'
 import { useConsciousnessStore } from './modules/consciousness'
 
+interface LobsterBridgeOptions {
+  fileAttachments?: Array<{ type: 'file', data: string, mimeType: string, name: string }>
+  skillIds?: string[]
+  baseUrl: string
+  apiKey: string
+}
+
 interface SendOptions {
   model: string
   chatProvider: ChatProvider
@@ -28,6 +35,7 @@ interface SendOptions {
   attachments?: { type: 'image', data: string, mimeType: string }[]
   tools?: StreamOptions['tools']
   input?: WebSocketEventInputs
+  bridgeOptions?: LobsterBridgeOptions
 }
 
 interface ForkOptions {
@@ -308,41 +316,157 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
 
       scheduleStreamTimeout()
       try {
-        await Promise.race([
-          llmStore.stream(options.model, options.chatProvider, newMessages as Message[], {
-            headers,
-            tools: options.tools,
-            onStreamEvent: async (event: StreamEvent) => {
-              scheduleStreamTimeout()
-              switch (event.type) {
-                case 'tool-call':
-                  toolCallQueue.enqueue({
-                    type: 'tool-call',
-                    toolCall: event,
-                  })
+        if (options.bridgeOptions) {
+          // Bridge path: use Lobster Bridge AsyncIterable stream
+          const { streamChat } = await import('../services/lobster-bridge')
+          const { baseUrl, apiKey, fileAttachments, skillIds } = options.bridgeOptions
 
-                  break
-                case 'tool-result':
-                  toolCallQueue.enqueue({
-                    type: 'tool-call-result',
-                    id: event.toolCallId,
-                    result: event.result,
-                  })
+          // Upload file attachments if any
+          let uploadedFileIds: string[] = []
+          if (fileAttachments?.length) {
+            const { uploadFiles, bindSession } = await import('../services/lobster-bridge')
+            await bindSession(baseUrl, apiKey, sessionId)
+            uploadedFileIds = await uploadFiles(baseUrl, apiKey, sessionId, fileAttachments)
+          }
 
-                  break
-                case 'text-delta':
-                  fullText += event.text
-                  await parser.consume(event.text)
-                  break
-                case 'finish':
-                  break
-                case 'error':
-                  throw event.error ?? new Error('Stream error')
-              }
+          const bridgePayload = {
+            airiSessionId: sessionId,
+            model: options.model,
+            stream: true as const,
+            fileIds: uploadedFileIds,
+            skillIds,
+            messages: [{ role: 'user' as const, content: sendingMessage }],
+          } as any
+
+          for await (const event of streamChat({
+            baseUrl,
+            apiKey,
+            request: bridgePayload,
+            onStateChange: async (state: string) => {
+              await hooks.emitBridgeStateChangedHooks(state, streamingMessageContext)
             },
-          }),
-          timeoutPromise,
-        ])
+            onPermissionRequest: async (permPayload) => {
+              await hooks.emitBridgePermissionRequestHooks({
+                requestId: permPayload.requestId,
+                capabilityToken: permPayload.capabilityToken,
+                toolName: permPayload.toolName,
+                toolInput: permPayload.toolInput,
+                expiresAt: permPayload.expiresAt,
+              }, streamingMessageContext)
+            },
+          })) {
+            if (shouldAbort())
+              break
+
+            scheduleStreamTimeout()
+            const eventType = (event as any).type
+
+            switch (eventType) {
+              case 'assistant.delta': {
+                const delta = (event as any).payload?.delta ?? ''
+                if (!delta)
+                  break
+                fullText += delta
+                await parser.consume(delta)
+                break
+              }
+              case 'assistant.final': {
+                const finalContent = (event as any).payload?.content ?? ''
+                if (finalContent && finalContent !== fullText) {
+                  // Reconciliation: if final differs from accumulated, use final
+                  fullText = finalContent
+                }
+                break
+              }
+              case 'reasoning.delta': {
+                const delta = (event as any).payload?.delta ?? ''
+                if (delta) {
+                  buildingMessage.categorization = buildingMessage.categorization ?? { speech: '', reasoning: '' }
+                  buildingMessage.categorization.reasoning += delta
+                  updateUI()
+                }
+                break
+              }
+              case 'reasoning.final': {
+                const finalReasoning = (event as any).payload?.content ?? ''
+                buildingMessage.categorization = buildingMessage.categorization ?? { speech: '', reasoning: '' }
+                buildingMessage.categorization.reasoning = finalReasoning
+                updateUI()
+                break
+              }
+              case 'tool.call': {
+                const toolCallEvent = event as any
+                toolCallQueue.enqueue({
+                  type: 'tool-call',
+                  toolCall: {
+                    toolName: String(toolCallEvent.payload?.name ?? ''),
+                    args: typeof toolCallEvent.payload?.input === 'string'
+                      ? toolCallEvent.payload.input
+                      : JSON.stringify(toolCallEvent.payload?.input ?? {}, null, 2),
+                    toolCallId: String(toolCallEvent.payload?.id ?? nanoid()),
+                    toolCallType: 'function',
+                  },
+                })
+                break
+              }
+              case 'tool.result': {
+                const toolResultEvent = event as any
+                const toolCallId = String(toolResultEvent.payload?.id ?? nanoid())
+                const result = typeof toolResultEvent.payload?.result === 'string'
+                  ? toolResultEvent.payload.result
+                  : JSON.stringify(toolResultEvent.payload?.result ?? {}, null, 2)
+                toolCallQueue.enqueue({
+                  type: 'tool-call-result',
+                  id: toolCallId,
+                  result,
+                })
+                break
+              }
+              case 'done':
+              case 'session.bound':
+              case 'state.changed':
+                break
+            }
+          }
+        }
+        else {
+          // Standard path: use llmStore.stream
+          await Promise.race([
+            llmStore.stream(options.model, options.chatProvider, newMessages as Message[], {
+              headers,
+              tools: options.tools,
+              onStreamEvent: async (event: StreamEvent) => {
+                scheduleStreamTimeout()
+                switch (event.type) {
+                  case 'tool-call':
+                    toolCallQueue.enqueue({
+                      type: 'tool-call',
+                      toolCall: event,
+                    })
+
+                    break
+                  case 'tool-result':
+                    toolCallQueue.enqueue({
+                      type: 'tool-call-result',
+                      id: event.toolCallId,
+                      result: event.result,
+                    })
+
+                    break
+                  case 'text-delta':
+                    fullText += event.text
+                    await parser.consume(event.text)
+                    break
+                  case 'finish':
+                    break
+                  case 'error':
+                    throw event.error ?? new Error('Stream error')
+                }
+              },
+            }),
+            timeoutPromise,
+          ])
+        }
       }
       finally {
         if (streamTimeoutId) {
@@ -466,6 +590,8 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
     emitAssistantResponseEndHooks: hooks.emitAssistantResponseEndHooks,
     emitAssistantMessageHooks: hooks.emitAssistantMessageHooks,
     emitChatTurnCompleteHooks: hooks.emitChatTurnCompleteHooks,
+    emitBridgeStateChangedHooks: hooks.emitBridgeStateChangedHooks,
+    emitBridgePermissionRequestHooks: hooks.emitBridgePermissionRequestHooks,
 
     onBeforeMessageComposed: hooks.onBeforeMessageComposed,
     onAfterMessageComposed: hooks.onAfterMessageComposed,
@@ -477,5 +603,7 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
     onAssistantResponseEnd: hooks.onAssistantResponseEnd,
     onAssistantMessage: hooks.onAssistantMessage,
     onChatTurnComplete: hooks.onChatTurnComplete,
+    onBridgeStateChanged: hooks.onBridgeStateChanged,
+    onBridgePermissionRequest: hooks.onBridgePermissionRequest,
   }
 })
