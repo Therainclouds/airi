@@ -26,6 +26,7 @@
     "./constants": "./src/constants/index.ts",
     "./libs/*": "./src/libs/*.ts",
     "./libs": "./src/libs/index.ts",
+    "./services/*": "./src/services/*.ts",
     "./stores/providers/aliyun": "./src/stores/providers/aliyun/index.ts",
     "./stores/analytics": "./src/stores/analytics/index.ts",
     "./stores/character": "./src/stores/character/index.ts",

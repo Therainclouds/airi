@@ -1,8 +1,21 @@
 <script setup lang="ts">
+import type {
+  LobsterBridgeEvent,
+} from '@proj-airi/stage-ui/types/lobster-bridge'
 import type { ChatProvider } from '@xsai-ext/providers/utils'
 
 import { isStageTamagotchi } from '@proj-airi/stage-shared'
-import { useAudioAnalyzer } from '@proj-airi/stage-ui/composables'
+import { useAudioAnalyzer, useLobsterSkills } from '@proj-airi/stage-ui/composables'
+import {
+  bindSession,
+  buildUserContent,
+  listPendingPermissions,
+  normalizeApiKey,
+  normalizeBaseUrl,
+  respondPermission,
+  streamChat,
+  uploadFiles,
+} from '@proj-airi/stage-ui/services/lobster-bridge'
 import { useAudioContext } from '@proj-airi/stage-ui/stores/audio'
 import { useChatOrchestratorStore } from '@proj-airi/stage-ui/stores/chat'
 import { useChatSessionStore } from '@proj-airi/stage-ui/stores/chat/session-store'
@@ -10,15 +23,18 @@ import { useConsciousnessStore } from '@proj-airi/stage-ui/stores/modules/consci
 import { useHearingSpeechInputPipeline, useHearingStore } from '@proj-airi/stage-ui/stores/modules/hearing'
 import { useProvidersStore } from '@proj-airi/stage-ui/stores/providers'
 import { useSettings, useSettingsAudioDevice } from '@proj-airi/stage-ui/stores/settings'
-import { BasicTextarea, FieldSelect } from '@proj-airi/ui'
+import { LobsterBridgeError } from '@proj-airi/stage-ui/types/lobster-bridge'
+import { BasicTextarea } from '@proj-airi/ui'
 import { until } from '@vueuse/core'
 import { nanoid } from 'nanoid'
 import { storeToRefs } from 'pinia'
-import { TooltipContent, TooltipProvider, TooltipRoot, TooltipTrigger } from 'reka-ui'
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRouter } from 'vue-router'
 
-import IndicatorMicVolume from './IndicatorMicVolume.vue'
+import ChatInputControls from './ChatInputControls.vue'
+import LobsterPermissionList from './LobsterPermissionList.vue'
+import LobsterSkillsBar from './LobsterSkillsBar.vue'
 
 const messageInput = ref('')
 const hearingTooltipOpen = ref(false)
@@ -27,13 +43,16 @@ const isListening = ref(false) // Transcription listening state (separate from m
 
 interface ChatAttachment { type: 'image' | 'file', data: string, mimeType: string, name: string }
 const attachments = ref<ChatAttachment[]>([])
-const fileInput = ref<HTMLInputElement>()
-const lobsterSkills = ref<Array<{ id: string, name: string, enabled?: boolean }>>([])
 const selectedLobsterSkillIds = ref<string[]>([])
-
-function handleFileClick() {
-  fileInput.value?.click()
-}
+const pendingLobsterPermissions = ref<Array<{
+  requestId: string
+  capabilityToken: string
+  toolName: string
+  toolInput: Record<string, unknown>
+  turnId?: string
+  createdAt?: number
+  expiresAt?: number
+}>>([])
 
 function handleFileChange(event: Event) {
   const target = event.target as HTMLInputElement
@@ -72,19 +91,30 @@ const { enabled, selectedAudioInput, stream, audioInputs } = storeToRefs(useSett
 const chatOrchestrator = useChatOrchestratorStore()
 const chatSession = useChatSessionStore()
 const { ingest, onAfterMessageComposed, discoverToolsCompatibility } = chatOrchestrator
-const { messages } = storeToRefs(chatSession)
+const { messages, activeSessionId } = storeToRefs(chatSession)
 const { audioContext } = useAudioContext()
 const { t } = useI18n()
+const router = useRouter()
+const { skills: lobsterSkills, totalSkillsCount, enabledSkillsCount, refreshSkills: refreshLobsterSkills } = useLobsterSkills()
 
-function resolveLobsterBaseUrl(providerConfig: Record<string, any>) {
-  const configured = typeof providerConfig?.baseUrl === 'string' ? providerConfig.baseUrl.trim() : ''
-  const baseUrl = configured || 'http://127.0.0.1:19888'
-  return baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl
+function getLobsterProviderConfig() {
+  return providersStore.getProviderConfig(activeProvider.value) as Record<string, any>
 }
 
-function normalizeLobsterApiKey(providerConfig: Record<string, any>) {
-  const configured = String(providerConfig?.apiKey || '').trim()
-  return configured || 'lobsterai-agent-default-key'
+function openLobsterSkillsSettings() {
+  router.push('/settings/skills')
+}
+
+function toggleMicrophoneEnabled() {
+  enabled.value = !enabled.value
+}
+
+function getLobsterConnection() {
+  const providerConfig = getLobsterProviderConfig()
+  return {
+    baseUrl: normalizeBaseUrl(providerConfig?.baseUrl),
+    apiKey: normalizeApiKey(providerConfig?.apiKey),
+  }
 }
 
 function normalizeAssistantContent(content: unknown) {
@@ -102,123 +132,133 @@ function normalizeAssistantContent(content: unknown) {
   return ''
 }
 
-function buildLobsterUserContent(text: string, imageAttachments: ChatAttachment[]) {
-  if (imageAttachments.length === 0)
-    return text
-  const parts: Array<any> = [{ type: 'text', text }]
-  for (const attachment of imageAttachments) {
-    parts.push({
-      type: 'image_url',
-      image_url: {
-        url: `data:${attachment.mimeType};base64,${attachment.data}`,
-      },
-    })
-  }
-  return parts
-}
-
 async function loadLobsterSkills() {
   if (activeProvider.value !== 'lobster-agent')
     return
-  const providerConfig = providersStore.getProviderConfig(activeProvider.value) as Record<string, any>
-  const baseUrl = resolveLobsterBaseUrl(providerConfig)
-  const apiKey = normalizeLobsterApiKey(providerConfig)
-  const response = await fetch(`${baseUrl}/api/agent/skills`, {
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-    },
-  })
-  const data = await response.json().catch(() => null)
-  if (!response.ok) {
-    throw new Error(String(data?.error || `Skills API error (${response.status})`))
-  }
-  const skills = Array.isArray(data?.skills) ? data.skills : []
-  lobsterSkills.value = skills.map((item: any) => ({
-    id: String(item.id || ''),
-    name: String(item.name || item.id || ''),
-    enabled: !!item.enabled,
-  })).filter((item: { id: string }) => !!item.id)
-  selectedLobsterSkillIds.value = lobsterSkills.value.filter(item => item.enabled).map(item => item.id)
+  await refreshLobsterSkills()
+  syncSelectedLobsterSkillIds()
 }
 
-async function uploadLobsterFiles(baseUrl: string, apiKey: string, fileAttachments: ChatAttachment[]) {
-  const uploaded: string[] = []
-  for (const attachment of fileAttachments) {
-    const response = await fetch(`${baseUrl}/api/agent/files/upload`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        name: attachment.name,
-        mimeType: attachment.mimeType,
-        base64Data: attachment.data,
-      }),
-    })
-    const data = await response.json().catch(() => null)
-    if (!response.ok) {
-      throw new Error(String(data?.error || `File upload error (${response.status})`))
-    }
-    const filePath = String(data?.file?.path || '')
-    if (filePath)
-      uploaded.push(filePath)
-  }
-  return uploaded
+function syncSelectedLobsterSkillIds() {
+  const availableIds = new Set(lobsterSkills.value.map(skill => skill.id))
+  const retained = selectedLobsterSkillIds.value.filter(id => availableIds.has(id))
+  const defaults = lobsterSkills.value.filter(skill => skill.enabled).map(skill => skill.id)
+  selectedLobsterSkillIds.value = Array.from(new Set(retained.length > 0 ? retained : defaults))
 }
 
-async function streamLobsterAssistantResponse(response: Response, onDelta: (delta: string) => Promise<void>) {
-  const reader = response.body?.getReader()
-  if (!reader)
+async function ensureLobsterBridgeSession(sessionId: string) {
+  const { baseUrl, apiKey } = getLobsterConnection()
+  await bindSession(baseUrl, apiKey, sessionId)
+}
+
+function replacePendingLobsterPermissions(permissions: Array<{
+  requestId: string
+  capabilityToken: string
+  toolName: string
+  toolInput?: Record<string, unknown>
+  turnId?: string
+  createdAt?: number
+  expiresAt?: number
+}>) {
+  pendingLobsterPermissions.value = permissions.map(permission => ({
+    requestId: String(permission.requestId || ''),
+    capabilityToken: String(permission.capabilityToken || ''),
+    toolName: String(permission.toolName || ''),
+    toolInput: permission.toolInput ?? {},
+    turnId: typeof permission.turnId === 'string' ? permission.turnId : undefined,
+    createdAt: typeof permission.createdAt === 'number' ? permission.createdAt : undefined,
+    expiresAt: typeof permission.expiresAt === 'number' ? permission.expiresAt : undefined,
+  })).filter(permission => permission.requestId && permission.capabilityToken)
+}
+
+function upsertPendingLobsterPermission(payload: {
+  requestId: string
+  capabilityToken: string
+  toolName: string
+  toolInput?: Record<string, unknown>
+  turnId?: string
+  createdAt?: number
+  expiresAt?: number
+}) {
+  const next = {
+    requestId: String(payload.requestId || ''),
+    capabilityToken: String(payload.capabilityToken || ''),
+    toolName: String(payload.toolName || ''),
+    toolInput: payload.toolInput ?? {},
+    turnId: typeof payload.turnId === 'string' ? payload.turnId : undefined,
+    createdAt: typeof payload.createdAt === 'number' ? payload.createdAt : undefined,
+    expiresAt: typeof payload.expiresAt === 'number' ? payload.expiresAt : undefined,
+  }
+  const index = pendingLobsterPermissions.value.findIndex(item => item.requestId === next.requestId)
+  if (index === -1) {
+    pendingLobsterPermissions.value = [...pendingLobsterPermissions.value, next]
     return
+  }
+  pendingLobsterPermissions.value = pendingLobsterPermissions.value.map((item, itemIndex) => itemIndex === index ? next : item)
+}
 
-  const decoder = new TextDecoder()
-  let buffer = ''
+function removePendingLobsterPermission(requestId: string) {
+  pendingLobsterPermissions.value = pendingLobsterPermissions.value.filter(permission => permission.requestId !== requestId)
+}
 
-  while (true) {
-    const { value, done } = await reader.read()
-    if (done)
-      break
-    buffer += decoder.decode(value, { stream: true })
-    const lines = buffer.split('\n')
-    buffer = lines.pop() || ''
+async function syncPendingLobsterPermissions() {
+  if (activeProvider.value !== 'lobster-agent' || !activeSessionId.value) {
+    pendingLobsterPermissions.value = []
+    return
+  }
+  const { baseUrl, apiKey } = getLobsterConnection()
+  try {
+    const permissions = await listPendingPermissions(baseUrl, apiKey, activeSessionId.value)
+    replacePendingLobsterPermissions(permissions)
+  }
+  catch {
+    pendingLobsterPermissions.value = []
+  }
+}
 
-    for (const rawLine of lines) {
-      const line = rawLine.trim()
-      if (!line.startsWith('data:'))
-        continue
-      const payload = line.slice(5).trim()
-      if (!payload || payload === '[DONE]')
-        continue
-      let json: any
-      try {
-        json = JSON.parse(payload)
-      }
-      catch {
-        continue
-      }
-      const delta = json?.choices?.[0]?.delta?.content
-      if (typeof delta === 'string' && delta.length > 0) {
-        await onDelta(delta)
-      }
+async function respondToLobsterPermission(permission: {
+  requestId: string
+  capabilityToken: string
+}, decision: 'allow' | 'deny') {
+  const { baseUrl, apiKey } = getLobsterConnection()
+  try {
+    await respondPermission(baseUrl, apiKey, activeSessionId.value, permission.requestId, permission.capabilityToken, decision)
+    removePendingLobsterPermission(permission.requestId)
+  }
+  catch (error) {
+    await syncPendingLobsterPermissions().catch(() => {})
+    throw error
+  }
+}
+
+function syncAssistantMessageState(message: any, assistantContent: string, reasoningContent: string) {
+  message.content = normalizeAssistantContent(assistantContent)
+  const textSlice = message.slices.find((slice: any) => slice.type === 'text')
+  if (textSlice) {
+    textSlice.text = message.content
+  }
+  else if (message.content) {
+    message.slices.push({ type: 'text', text: message.content })
+  }
+  if (reasoningContent) {
+    message.categorization = {
+      speech: message.content,
+      reasoning: reasoningContent,
     }
   }
 }
 
-async function sendViaLobsterDirect(textToSend: string, sendingAttachments: ChatAttachment[]) {
-  const providerConfig = providersStore.getProviderConfig(activeProvider.value) as Record<string, any>
-  const apiKey = normalizeLobsterApiKey(providerConfig)
-
-  const baseUrl = resolveLobsterBaseUrl(providerConfig)
-  const sessionId = chatSession.activeSessionId
+async function sendViaLobsterBridge(textToSend: string, sendingAttachments: ChatAttachment[]) {
+  const { baseUrl, apiKey } = getLobsterConnection()
+  const sessionId = activeSessionId.value
   const sessionMessages = chatSession.getSessionMessages(sessionId)
   const imageAttachments = sendingAttachments.filter(item => item.type === 'image')
   const fileAttachments = sendingAttachments.filter(item => item.type === 'file')
-  const uploadedFilePaths = await uploadLobsterFiles(baseUrl, apiKey, fileAttachments)
-  const promptWithFiles = uploadedFilePaths.length > 0
-    ? `${textToSend || '请先查看我上传的文件并回答问题。'}\n${uploadedFilePaths.map(filePath => `input file: ${filePath}`).join('\n')}`
-    : textToSend
-  const userContent = buildLobsterUserContent(promptWithFiles, imageAttachments)
+
+  await ensureLobsterBridgeSession(sessionId)
+  const uploadedFileIds = await uploadFiles(baseUrl, apiKey, sessionId, fileAttachments as Array<{ type: 'file', data: string, mimeType: string, name: string }>)
+  const userContent = buildUserContent(textToSend, imageAttachments.map(a => ({ data: a.data, mimeType: a.mimeType })))
+
   const hookContext: any = {
     message: textToSend,
     composedMessage: textToSend,
@@ -235,29 +275,14 @@ async function sendViaLobsterDirect(textToSend: string, sendingAttachments: Chat
   chatSession.persistSessionMessages(sessionId)
 
   const payload = {
+    airiSessionId: sessionId,
     model: activeModel.value,
-    stream: true,
+    stream: true as const,
+    fileIds: uploadedFileIds,
     skillIds: selectedLobsterSkillIds.value,
-    messages: [{ role: 'user', content: userContent }],
+    messages: [{ role: 'user' as const, content: userContent }],
   }
   await chatOrchestrator.emitBeforeSendHooks(textToSend, hookContext)
-
-  const response = await fetch(`${baseUrl}/v1/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(payload),
-  })
-
-  if (!response.ok) {
-    const data = await response.json().catch(() => null)
-    throw new Error(String(data?.error || data?.message || `Lobster API error (${response.status})`))
-  }
-  if (!response.body) {
-    throw new Error('Lobster API returned empty stream body')
-  }
 
   const assistantMessage: any = {
     role: 'assistant',
@@ -271,18 +296,128 @@ async function sendViaLobsterDirect(textToSend: string, sendingAttachments: Chat
   chatSession.persistSessionMessages(sessionId)
 
   let assistantContent = ''
-  await streamLobsterAssistantResponse(response, async (delta) => {
-    assistantContent += delta
-    assistantMessage.content = assistantContent
-    assistantMessage.slices = [{ type: 'text', text: assistantContent }]
-    chatSession.persistSessionMessages(sessionId)
-    await chatOrchestrator.emitTokenLiteralHooks(delta, hookContext)
-  })
-  assistantMessage.content = normalizeAssistantContent(assistantContent)
-  assistantMessage.slices = [{ type: 'text', text: assistantMessage.content }]
+  let reasoningContent = ''
+
+  try {
+    for await (const event of streamChat({
+      baseUrl,
+      apiKey,
+      request: payload,
+      onStateChange: (_state: string) => {
+        // Phase 2: map to animation states
+      },
+      onPermissionRequest: (permPayload: {
+        requestId: string
+        capabilityToken: string
+        toolName: string
+        toolInput: Record<string, unknown>
+        expiresAt: number
+      }) => {
+        upsertPendingLobsterPermission(permPayload)
+      },
+    })) {
+      switch ((event as LobsterBridgeEvent).type) {
+        case 'assistant.delta': {
+          const delta = (event as any).payload?.delta ?? ''
+          if (!delta)
+            break
+          assistantContent += delta
+          syncAssistantMessageState(assistantMessage, assistantContent, reasoningContent)
+          chatSession.persistSessionMessages(sessionId)
+          await chatOrchestrator.emitTokenLiteralHooks(delta, hookContext)
+          break
+        }
+        case 'assistant.final': {
+          assistantContent = (event as any).payload?.content ?? assistantContent
+          syncAssistantMessageState(assistantMessage, assistantContent, reasoningContent)
+          chatSession.persistSessionMessages(sessionId)
+          break
+        }
+        case 'reasoning.delta': {
+          const delta = (event as any).payload?.delta ?? ''
+          if (!delta)
+            break
+          reasoningContent += delta
+          syncAssistantMessageState(assistantMessage, assistantContent, reasoningContent)
+          chatSession.persistSessionMessages(sessionId)
+          break
+        }
+        case 'reasoning.final': {
+          reasoningContent = (event as any).payload?.content ?? reasoningContent
+          syncAssistantMessageState(assistantMessage, assistantContent, reasoningContent)
+          chatSession.persistSessionMessages(sessionId)
+          break
+        }
+        case 'tool.call': {
+          const toolCallEvent = event as any
+          assistantMessage.slices.push({
+            type: 'tool-call',
+            toolCall: {
+              toolName: String(toolCallEvent.payload?.name ?? ''),
+              args: typeof toolCallEvent.payload?.input === 'string'
+                ? toolCallEvent.payload.input
+                : JSON.stringify(toolCallEvent.payload?.input ?? {}, null, 2),
+              toolCallId: String(toolCallEvent.payload?.id ?? nanoid()),
+              toolCallType: 'function',
+            },
+          })
+          chatSession.persistSessionMessages(sessionId)
+          break
+        }
+        case 'tool.result': {
+          const toolResultEvent = event as any
+          const toolCallId = String(toolResultEvent.payload?.id ?? nanoid())
+          const result = typeof toolResultEvent.payload?.result === 'string'
+            ? toolResultEvent.payload.result
+            : JSON.stringify(toolResultEvent.payload?.result ?? {}, null, 2)
+          assistantMessage.tool_results = [
+            ...assistantMessage.tool_results.filter((item: any) => item.id !== toolCallId),
+            { id: toolCallId, result },
+          ]
+          assistantMessage.slices.push({
+            type: 'tool-call-result',
+            id: toolCallId,
+            result,
+          })
+          chatSession.persistSessionMessages(sessionId)
+          break
+        }
+        case 'done':
+        case 'session.bound':
+        case 'state.changed':
+          break
+      }
+    }
+  }
+  catch (error: unknown) {
+    if (error instanceof LobsterBridgeError) {
+      throw new Error(error.message)
+    }
+    throw error
+  }
+
+  syncAssistantMessageState(assistantMessage, assistantContent, reasoningContent)
   chatSession.persistSessionMessages(sessionId)
+  await syncPendingLobsterPermissions().catch(() => {})
   await chatOrchestrator.emitStreamEndHooks(hookContext)
   await chatOrchestrator.emitAssistantResponseEndHooks(assistantMessage.content, hookContext)
+}
+
+async function handleLobsterPermissionDecision(permission: {
+  requestId: string
+  capabilityToken: string
+}, decision: 'allow' | 'deny') {
+  try {
+    await respondToLobsterPermission(permission, decision)
+  }
+  catch (error) {
+    messages.value.push({
+      role: 'error',
+      content: (error as Error).message,
+    })
+    if (activeSessionId.value)
+      chatSession.persistSessionMessages(activeSessionId.value)
+  }
 }
 
 // Transcription pipeline
@@ -366,7 +501,7 @@ async function handleSend() {
 
   try {
     if (activeProvider.value === 'lobster-agent') {
-      await sendViaLobsterDirect(textToSend, sendingAttachments)
+      await sendViaLobsterBridge(textToSend, sendingAttachments)
     }
     else {
       const providerConfig = providersStore.getProviderConfig(activeProvider.value)
@@ -405,8 +540,26 @@ watch([activeProvider, activeModel], async () => {
     await loadLobsterSkills().catch((error) => {
       console.warn('[ChatArea] Failed to load lobster skills:', error)
     })
+    await syncPendingLobsterPermissions().catch((error) => {
+      console.warn('[ChatArea] Failed to restore lobster permissions:', error)
+    })
   }
+  else {
+    pendingLobsterPermissions.value = []
+  }
+}, { immediate: true })
+
+watch(activeSessionId, async () => {
+  if (activeProvider.value !== 'lobster-agent')
+    return
+  await syncPendingLobsterPermissions().catch((error) => {
+    console.warn('[ChatArea] Failed to refresh lobster permissions for session:', error)
+  })
 })
+
+watch(lobsterSkills, () => {
+  syncSelectedLobsterSkillIds()
+}, { deep: true })
 
 onAfterMessageComposed(async () => {
 })
@@ -698,7 +851,7 @@ watch(autoSendEnabled, (enabled) => {
         text="primary-600 dark:primary-100  placeholder:primary-500 dark:placeholder:primary-200"
         bg="transparent"
         min-h="[100px]" max-h="[300px]" w-full
-        rounded-t-xl p-4 font-medium pb="[60px]"
+        rounded-t-xl p-4 font-medium
         outline-none transition="all duration-250 ease-in-out placeholder:all placeholder:duration-250 placeholder:ease-in-out"
         :class="{
           'transition-colors-none placeholder:transition-colors-none': themeColorsHueDynamic,
@@ -708,103 +861,34 @@ watch(autoSendEnabled, (enabled) => {
         @compositionend="isComposing = false"
       />
 
-      <div v-if="activeProvider === 'lobster-agent' && lobsterSkills.length > 0" class="flex flex-wrap gap-2 px-4 pb-2">
-        <button
-          v-for="skill in lobsterSkills"
-          :key="skill.id"
-          class="border rounded-full px-2 py-1 text-xs transition-colors"
-          :class="selectedLobsterSkillIds.includes(skill.id) ? 'bg-primary-500/15 border-primary-400 text-primary-700 dark:text-primary-200' : 'bg-neutral-100 dark:bg-neutral-800 border-neutral-300 dark:border-neutral-600 text-neutral-600 dark:text-neutral-300'"
-          @click="selectedLobsterSkillIds = selectedLobsterSkillIds.includes(skill.id) ? selectedLobsterSkillIds.filter(id => id !== skill.id) : [...selectedLobsterSkillIds, skill.id]"
-        >
-          {{ skill.name }}
-        </button>
-      </div>
+      <LobsterSkillsBar
+        :visible="activeProvider === 'lobster-agent'"
+        :total-skills-count="totalSkillsCount"
+        :enabled-skills-count="enabledSkillsCount"
+        @open-settings="openLobsterSkillsSettings"
+      />
 
-      <!-- Bottom-left action button: Microphone -->
-      <div
-        absolute bottom-2 left-2 z-10 flex items-center gap-2
-      >
-        <!-- File Button -->
-        <input ref="fileInput" type="file" multiple class="hidden" @change="handleFileChange">
-        <button
-          class="h-8 w-8 flex items-center justify-center rounded-md outline-none transition-all duration-200 active:scale-95 hover:bg-neutral-100 dark:hover:bg-neutral-800"
-          text="lg neutral-500 dark:neutral-400"
-          title="Attach file"
-          @click="handleFileClick"
-        >
-          <div class="i-ph:paperclip h-5 w-5" />
-        </button>
+      <LobsterPermissionList
+        :visible="activeProvider === 'lobster-agent' && pendingLobsterPermissions.length > 0"
+        :permissions="pendingLobsterPermissions"
+        @decide="handleLobsterPermissionDecision"
+      />
 
-        <!-- Microphone icon button -->
-        <TooltipProvider :delay-duration="0" :skip-delay-duration="0">
-          <TooltipRoot v-model:open="hearingTooltipOpen">
-            <TooltipTrigger as-child>
-              <button
-                class="h-8 w-8 flex items-center justify-center rounded-md outline-none transition-all duration-200 active:scale-95"
-                text="lg neutral-500 dark:neutral-400"
-                :title="t('settings.hearing.title')"
-              >
-                <Transition name="fade" mode="out-in">
-                  <IndicatorMicVolume v-if="enabled" class="h-5 w-5" />
-                  <div v-else class="i-ph:microphone-slash h-5 w-5" />
-                </Transition>
-              </button>
-            </TooltipTrigger>
-            <Transition name="fade">
-              <TooltipContent
-                side="top"
-                :side-offset="8"
-                :class="[
-                  'w-72 max-w-[18rem] rounded-xl border border-neutral-200/60 bg-neutral-50/90 p-4',
-                  'shadow-lg backdrop-blur-md dark:border-neutral-800/30 dark:bg-neutral-900/80',
-                  'flex flex-col gap-3',
-                ]"
-              >
-                <div class="flex flex-col items-center justify-center">
-                  <div class="relative h-28 w-28 select-none">
-                    <div
-                      class="absolute left-1/2 top-1/2 h-20 w-20 rounded-full transition-all duration-150 -translate-x-1/2 -translate-y-1/2"
-                      :style="{ transform: `translate(-50%, -50%) scale(${1 + normalizedVolume * 0.35})`, opacity: String(0.25 + normalizedVolume * 0.25) }"
-                      :class="enabled ? 'bg-primary-500/15 dark:bg-primary-600/20' : 'bg-neutral-300/20 dark:bg-neutral-700/20'"
-                    />
-                    <div
-                      class="absolute left-1/2 top-1/2 h-24 w-24 rounded-full transition-all duration-200 -translate-x-1/2 -translate-y-1/2"
-                      :style="{ transform: `translate(-50%, -50%) scale(${1.2 + normalizedVolume * 0.55})`, opacity: String(0.15 + normalizedVolume * 0.2) }"
-                      :class="enabled ? 'bg-primary-500/10 dark:bg-primary-600/15' : 'bg-neutral-300/10 dark:bg-neutral-700/10'"
-                    />
-                    <div
-                      class="absolute left-1/2 top-1/2 h-28 w-28 rounded-full transition-all duration-300 -translate-x-1/2 -translate-y-1/2"
-                      :style="{ transform: `translate(-50%, -50%) scale(${1.5 + normalizedVolume * 0.8})`, opacity: String(0.08 + normalizedVolume * 0.15) }"
-                      :class="enabled ? 'bg-primary-500/5 dark:bg-primary-600/10' : 'bg-neutral-300/5 dark:bg-neutral-700/5'"
-                    />
-                    <button
-                      class="absolute left-1/2 top-1/2 grid h-16 w-16 place-items-center rounded-full shadow-md outline-none transition-all duration-200 -translate-x-1/2 -translate-y-1/2"
-                      :class="enabled
-                        ? 'bg-primary-500 text-white hover:bg-primary-600 active:scale-95'
-                        : 'bg-neutral-200 text-neutral-600 hover:bg-neutral-300 active:scale-95 dark:bg-neutral-700 dark:text-neutral-200'"
-                      @click="enabled = !enabled"
-                    >
-                      <div :class="enabled ? 'i-ph:microphone' : 'i-ph:microphone-slash'" class="h-6 w-6" />
-                    </button>
-                  </div>
-                  <p class="mt-3 text-xs text-neutral-500 dark:text-neutral-400">
-                    {{ enabled ? 'Microphone enabled' : 'Microphone disabled' }}
-                  </p>
-                </div>
-
-                <FieldSelect
-                  v-model="selectedAudioInput"
-                  label="Input device"
-                  description="Select the microphone you want to use."
-                  :options="audioInputs.map(device => ({ label: device.label || 'Unknown Device', value: device.deviceId }))"
-                  layout="vertical"
-                  placeholder="Select microphone"
-                />
-              </TooltipContent>
-            </Transition>
-          </TooltipRoot>
-        </TooltipProvider>
-      </div>
+      <ChatInputControls
+        :enabled="enabled"
+        :is-listening="isListening"
+        :normalized-volume="normalizedVolume"
+        :total-skills-count="totalSkillsCount"
+        :enabled-skills-count="enabledSkillsCount"
+        :active-provider="activeProvider"
+        :audio-inputs="audioInputs"
+        :selected-audio-input="selectedAudioInput"
+        :hearing-tooltip-open="hearingTooltipOpen"
+        @files-selected="handleFileChange"
+        @update-hearing-tooltip-open="hearingTooltipOpen = $event"
+        @update-selected-audio-input="selectedAudioInput = $event"
+        @toggle-listening="toggleMicrophoneEnabled"
+      />
     </div>
   </div>
 </template>
