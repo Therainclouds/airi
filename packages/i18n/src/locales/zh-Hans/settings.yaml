@@ -769,7 +769,7 @@ pages:
     title: 技能
     lobster:
       total: "总技能"
-      enabled: "已启用"
+      enabledCount: "已启用"
       manage: "管理技能"
       installed: "已安装技能"
       list: "技能列表"
@@ -798,8 +798,8 @@ pages:
       noMatchDesc: "可以调整筛选条件，或者先从下方添加一个新的技能来源。"
       enable: "启用"
       disable: "停用"
-      enabled: "已启用"
-      disabled: "已停用"
+      statusEnabled: "已启用"
+      statusDisabled: "已停用"
       builtin: "内置"
       configure: "配置"
       configKey: "配置键"

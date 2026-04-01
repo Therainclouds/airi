@@ -165,10 +165,10 @@ async function toggleSkill(skill: LobsterSkillType) {
   actionLoadingId.value = skill.id
   try {
     await setSkillEnabled(skill.id, !skill.enabled)
-    toast.success(skill.enabled ? t('settings.pages.skills.lobster.disabled') : t('settings.pages.skills.lobster.enabled'))
+    toast.success(skill.enabled ? t('settings.pages.skills.lobster.statusDisabled') : t('settings.pages.skills.lobster.statusEnabled'))
   }
   catch (error) {
-    toast.error(error instanceof Error ? error.message : t('settings.pages.skills.lobster.disabled'))
+    toast.error(error instanceof Error ? error.message : t('settings.pages.skills.lobster.statusDisabled'))
   }
   finally {
     actionLoadingId.value = null
@@ -282,7 +282,7 @@ onMounted(async () => {
       </div>
       <div class="rounded-2xl bg-neutral-100 p-4 dark:bg-neutral-900/70">
         <div class="text-xs uppercase opacity-60">
-          {{ t('settings.pages.skills.lobster.enabled') }}
+          {{ t('settings.pages.skills.lobster.enabledCount') }}
         </div>
         <div class="mt-2 text-3xl font-semibold">
           {{ enabledSkillsCount }}
@@ -357,7 +357,7 @@ onMounted(async () => {
                       class="rounded-full px-2 py-0.5 text-xs"
                       :class="skill.enabled ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300' : 'bg-neutral-200 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300'"
                     >
-                      {{ skill.enabled ? t('settings.pages.skills.lobster.enabled') : t('settings.pages.skills.lobster.disabled') }}
+                      {{ skill.enabled ? t('settings.pages.skills.lobster.statusEnabled') : t('settings.pages.skills.lobster.statusDisabled') }}
                     </span>
                     <span
                       v-if="skill.isBuiltIn"

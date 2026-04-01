@@ -22,7 +22,7 @@ const { t } = useI18n()
           {{ t('settings.pages.skills.lobster.total') }} {{ totalSkillsCount }}
         </span>
         <span class="rounded-full bg-emerald-500/10 px-2.5 py-1 text-emerald-700 dark:text-emerald-300">
-          {{ t('settings.pages.skills.lobster.enabled') }} {{ enabledSkillsCount }}
+          {{ t('settings.pages.skills.lobster.enabledCount') }} {{ enabledSkillsCount }}
         </span>
       </div>
       <button
