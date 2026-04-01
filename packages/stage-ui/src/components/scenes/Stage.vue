@@ -73,7 +73,7 @@ const { mouthOpenSize } = storeToRefs(useSpeakingStore())
 const { audioContext } = useAudioContext()
 const currentAudioSource = ref<AudioBufferSourceNode>()
 
-const { onBeforeMessageComposed, onBeforeSend, onTokenLiteral, onTokenSpecial, onStreamEnd, onAssistantResponseEnd } = useChatOrchestratorStore()
+const { onBeforeMessageComposed, onBeforeSend, onTokenLiteral, onTokenSpecial, onStreamEnd, onAssistantResponseEnd, onBridgeStateChanged, onBridgePermissionRequest } = useChatOrchestratorStore()
 const chatHookCleanups: Array<() => void> = []
 // WORKAROUND: clear previous handlers on unmount to avoid duplicate calls when this component remounts.
 //             We keep per-hook disposers instead of wiping the global chat hooks to play nicely with
@@ -996,12 +996,70 @@ chatHookCleanups.push(onAssistantResponseEnd(async (_message) => {
   textMouthUntil.value = Date.now()
   assistantMotionTriggered.value = false
   applyStageActionState('done', 1400)
-  // const res = await embed({
-  //   ...transformersProvider.embed('Xenova/nomic-embed-text-v1'),
-  //   input: message,
-  // })
+}))
 
-  // await db.value?.execute(`INSERT INTO memory_test (vec) VALUES (${JSON.stringify(res.embedding)});`)
+// ==================== Bridge State Handlers (Phase 3: T012-T016) ====================
+// Map Lobster Bridge structured states to animation/emotion system
+
+chatHookCleanups.push(onBridgeStateChanged(async (state) => {
+  switch (state) {
+    case 'think':
+      // T012: Waiting/thinking state - show Think motion
+      stopIdleHeadWave()
+      freezeHeadAngles()
+      triggerLargeMotion(Emotion.Think, 3000)
+      if (!commandOnlyMotionMode) {
+        currentMotion.value = { group: 'Think' }
+      }
+      break
+
+    case 'tool_use':
+      // T014: Tool execution state - show focused/thinking motion
+      stopIdleHeadWave()
+      freezeHeadAngles()
+      triggerLargeMotion(Emotion.Curious, 2500)
+      if (!commandOnlyMotionMode) {
+        currentMotion.value = { group: 'Think' }
+      }
+      break
+
+    case 'ask_user':
+      // T014: Waiting for user permission - pause speaking, show waiting state
+      releaseHeadAngles()
+      startIdleHeadWave()
+      textMouthUntil.value = 0
+      assistantMotionTriggered.value = false
+      triggerLargeMotion(Emotion.Awkward, 2000)
+      break
+
+    case 'success':
+      // T015: Success state - brief happy, then idle
+      releaseHeadAngles()
+      startIdleHeadWave()
+      textMouthUntil.value = Date.now()
+      assistantMotionTriggered.value = false
+      applyStageActionState('done', 1400)
+      break
+
+    case 'error':
+      // T015: Error state - show surprise/concern, then idle
+      releaseHeadAngles()
+      startIdleHeadWave()
+      textMouthUntil.value = Date.now()
+      assistantMotionTriggered.value = false
+      triggerLargeMotion(Emotion.Surprise, 2000)
+      break
+  }
+}))
+
+// T016: Permission request also triggers ask_user-like state
+chatHookCleanups.push(onBridgePermissionRequest(async (_permission) => {
+  // When a permission request arrives, ensure the character shows a waiting state
+  releaseHeadAngles()
+  startIdleHeadWave()
+  textMouthUntil.value = 0
+  assistantMotionTriggered.value = false
+  triggerLargeMotion(Emotion.Awkward, 2000)
 }))
 
 onUnmounted(() => {
