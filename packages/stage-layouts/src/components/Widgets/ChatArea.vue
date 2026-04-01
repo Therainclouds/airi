@@ -316,6 +316,7 @@ async function handleSend() {
           apiKey,
           fileAttachments,
           skillIds: selectedLobsterSkillIds.value,
+          useBridge: (providerConfig as any)?.useBridge !== false,
         },
       })
     }

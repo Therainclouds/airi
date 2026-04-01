@@ -26,6 +26,7 @@ interface LobsterBridgeOptions {
   skillIds?: string[]
   baseUrl: string
   apiKey: string
+  useBridge?: boolean
 }
 
 interface SendOptions {
@@ -316,121 +317,134 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
 
       scheduleStreamTimeout()
       try {
-        if (options.bridgeOptions) {
-          // Bridge path: use Lobster Bridge AsyncIterable stream
-          const { streamChat } = await import('../services/lobster-bridge')
-          const { baseUrl, apiKey, fileAttachments, skillIds } = options.bridgeOptions
+        // NOTICE: T033-T034 -- Bridge path with fallback to standard LLM stream
+        // If useBridge is false (feature flag) or Bridge fails, fall back to /v1/chat/completions
+        const useBridge = options.bridgeOptions?.useBridge !== false
+        let bridgeFailed = false
 
-          // Upload file attachments if any
-          let uploadedFileIds: string[] = []
-          if (fileAttachments?.length) {
-            const { uploadFiles, bindSession } = await import('../services/lobster-bridge')
-            await bindSession(baseUrl, apiKey, sessionId)
-            uploadedFileIds = await uploadFiles(baseUrl, apiKey, sessionId, fileAttachments)
-          }
+        if (options.bridgeOptions && useBridge) {
+          try {
+            // Bridge path: use Lobster Bridge AsyncIterable stream
+            const { streamChat } = await import('../services/lobster-bridge')
+            const { baseUrl, apiKey, fileAttachments, skillIds } = options.bridgeOptions
 
-          const bridgePayload = {
-            airiSessionId: sessionId,
-            model: options.model,
-            stream: true as const,
-            fileIds: uploadedFileIds,
-            skillIds,
-            messages: [{ role: 'user' as const, content: sendingMessage }],
-          } as any
+            // Upload file attachments if any
+            let uploadedFileIds: string[] = []
+            if (fileAttachments?.length) {
+              const { uploadFiles, bindSession } = await import('../services/lobster-bridge')
+              await bindSession(baseUrl, apiKey, sessionId)
+              uploadedFileIds = await uploadFiles(baseUrl, apiKey, sessionId, fileAttachments)
+            }
 
-          for await (const event of streamChat({
-            baseUrl,
-            apiKey,
-            request: bridgePayload,
-            onStateChange: async (state: string) => {
-              await hooks.emitBridgeStateChangedHooks(state, streamingMessageContext)
-            },
-            onPermissionRequest: async (permPayload) => {
-              await hooks.emitBridgePermissionRequestHooks({
-                requestId: permPayload.requestId,
-                capabilityToken: permPayload.capabilityToken,
-                toolName: permPayload.toolName,
-                toolInput: permPayload.toolInput,
-                expiresAt: permPayload.expiresAt,
-              }, streamingMessageContext)
-            },
-          })) {
-            if (shouldAbort())
-              break
+            const bridgePayload = {
+              airiSessionId: sessionId,
+              model: options.model,
+              stream: true as const,
+              fileIds: uploadedFileIds,
+              skillIds,
+              messages: [{ role: 'user' as const, content: sendingMessage }],
+            } as any
 
-            scheduleStreamTimeout()
-            const eventType = (event as any).type
+            for await (const event of streamChat({
+              baseUrl,
+              apiKey,
+              request: bridgePayload,
+              onStateChange: async (state: string) => {
+                await hooks.emitBridgeStateChangedHooks(state, streamingMessageContext)
+              },
+              onPermissionRequest: async (permPayload) => {
+                await hooks.emitBridgePermissionRequestHooks({
+                  requestId: permPayload.requestId,
+                  capabilityToken: permPayload.capabilityToken,
+                  toolName: permPayload.toolName,
+                  toolInput: permPayload.toolInput,
+                  expiresAt: permPayload.expiresAt,
+                }, streamingMessageContext)
+              },
+            })) {
+              if (shouldAbort())
+                break
 
-            switch (eventType) {
-              case 'assistant.delta': {
-                const delta = (event as any).payload?.delta ?? ''
-                if (!delta)
+              scheduleStreamTimeout()
+              const eventType = (event as any).type
+
+              switch (eventType) {
+                case 'assistant.delta': {
+                  const delta = (event as any).payload?.delta ?? ''
+                  if (!delta)
+                    break
+                  fullText += delta
+                  await parser.consume(delta)
                   break
-                fullText += delta
-                await parser.consume(delta)
-                break
-              }
-              case 'assistant.final': {
-                const finalContent = (event as any).payload?.content ?? ''
-                if (finalContent && finalContent !== fullText) {
-                  // Reconciliation: if final differs from accumulated, use final
-                  fullText = finalContent
                 }
-                break
-              }
-              case 'reasoning.delta': {
-                const delta = (event as any).payload?.delta ?? ''
-                if (delta) {
+                case 'assistant.final': {
+                  const finalContent = (event as any).payload?.content ?? ''
+                  if (finalContent && finalContent !== fullText) {
+                    // Reconciliation: if final differs from accumulated, use final
+                    fullText = finalContent
+                  }
+                  break
+                }
+                case 'reasoning.delta': {
+                  const delta = (event as any).payload?.delta ?? ''
+                  if (delta) {
+                    buildingMessage.categorization = buildingMessage.categorization ?? { speech: '', reasoning: '' }
+                    buildingMessage.categorization.reasoning += delta
+                    updateUI()
+                  }
+                  break
+                }
+                case 'reasoning.final': {
+                  const finalReasoning = (event as any).payload?.content ?? ''
                   buildingMessage.categorization = buildingMessage.categorization ?? { speech: '', reasoning: '' }
-                  buildingMessage.categorization.reasoning += delta
+                  buildingMessage.categorization.reasoning = finalReasoning
                   updateUI()
+                  break
                 }
-                break
+                case 'tool.call': {
+                  const toolCallEvent = event as any
+                  toolCallQueue.enqueue({
+                    type: 'tool-call',
+                    toolCall: {
+                      toolName: String(toolCallEvent.payload?.name ?? ''),
+                      args: typeof toolCallEvent.payload?.input === 'string'
+                        ? toolCallEvent.payload.input
+                        : JSON.stringify(toolCallEvent.payload?.input ?? {}, null, 2),
+                      toolCallId: String(toolCallEvent.payload?.id ?? nanoid()),
+                      toolCallType: 'function',
+                    },
+                  })
+                  break
+                }
+                case 'tool.result': {
+                  const toolResultEvent = event as any
+                  const toolCallId = String(toolResultEvent.payload?.id ?? nanoid())
+                  const result = typeof toolResultEvent.payload?.result === 'string'
+                    ? toolResultEvent.payload.result
+                    : JSON.stringify(toolResultEvent.payload?.result ?? {}, null, 2)
+                  toolCallQueue.enqueue({
+                    type: 'tool-call-result',
+                    id: toolCallId,
+                    result,
+                  })
+                  break
+                }
+                case 'done':
+                case 'session.bound':
+                case 'state.changed':
+                  break
               }
-              case 'reasoning.final': {
-                const finalReasoning = (event as any).payload?.content ?? ''
-                buildingMessage.categorization = buildingMessage.categorization ?? { speech: '', reasoning: '' }
-                buildingMessage.categorization.reasoning = finalReasoning
-                updateUI()
-                break
-              }
-              case 'tool.call': {
-                const toolCallEvent = event as any
-                toolCallQueue.enqueue({
-                  type: 'tool-call',
-                  toolCall: {
-                    toolName: String(toolCallEvent.payload?.name ?? ''),
-                    args: typeof toolCallEvent.payload?.input === 'string'
-                      ? toolCallEvent.payload.input
-                      : JSON.stringify(toolCallEvent.payload?.input ?? {}, null, 2),
-                    toolCallId: String(toolCallEvent.payload?.id ?? nanoid()),
-                    toolCallType: 'function',
-                  },
-                })
-                break
-              }
-              case 'tool.result': {
-                const toolResultEvent = event as any
-                const toolCallId = String(toolResultEvent.payload?.id ?? nanoid())
-                const result = typeof toolResultEvent.payload?.result === 'string'
-                  ? toolResultEvent.payload.result
-                  : JSON.stringify(toolResultEvent.payload?.result ?? {}, null, 2)
-                toolCallQueue.enqueue({
-                  type: 'tool-call-result',
-                  id: toolCallId,
-                  result,
-                })
-                break
-              }
-              case 'done':
-              case 'session.bound':
-              case 'state.changed':
-                break
             }
           }
+          catch (bridgeError) {
+            // T034: Bridge fallback -- log and fall through to standard LLM stream
+            console.warn('[chat] Bridge stream failed, falling back to standard LLM stream:', bridgeError)
+            bridgeFailed = true
+          }
         }
-        else {
-          // Standard path: use llmStore.stream
+
+        // Standard path: use llmStore.stream (always if no bridgeOptions, or if Bridge failed/disabled)
+        if (!options.bridgeOptions || bridgeFailed) {
           await Promise.race([
             llmStore.stream(options.model, options.chatProvider, newMessages as Message[], {
               headers,

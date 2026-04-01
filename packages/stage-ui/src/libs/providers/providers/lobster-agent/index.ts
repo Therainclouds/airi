@@ -15,6 +15,10 @@ const lobsterAgentConfigSchema = z.object({
     .string('Base URL')
     .optional()
     .default('http://127.0.0.1:19888'),
+  useBridge: z
+    .boolean('Use Bridge Protocol')
+    .optional()
+    .default(true),
 })
 
 type LobsterAgentConfig = z.input<typeof lobsterAgentConfigSchema>
@@ -96,6 +100,11 @@ export const providerLobsterAgent = defineProvider<LobsterAgentConfig>({
       labelLocalized: t('settings.pages.providers.catalog.edit.config.common.fields.field.base-url.label'),
       descriptionLocalized: t('settings.pages.providers.catalog.edit.config.common.fields.field.base-url.description'),
       placeholderLocalized: t('settings.pages.providers.catalog.edit.config.common.fields.field.base-url.placeholder'),
+    }),
+    useBridge: lobsterAgentConfigSchema.shape.useBridge.meta({
+      labelLocalized: 'Use Bridge Protocol',
+      descriptionLocalized: 'Enable the structured Lobster Bridge protocol (events, tools, permissions). Disable to fall back to OpenAI-compatible text mode.',
+      type: 'boolean',
     }),
   }),
 
