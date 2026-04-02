@@ -58,6 +58,31 @@ interface QueuedSend {
   }
 }
 
+function extractTextContent(content: unknown): string {
+  if (typeof content === 'string')
+    return content
+
+  if (!Array.isArray(content))
+    return ''
+
+  return content
+    .map((part) => {
+      if (typeof part === 'string')
+        return part
+      if (part && typeof part === 'object' && 'text' in part)
+        return String(part.text ?? '')
+      return ''
+    })
+    .join('')
+    .trim()
+}
+
+function extractBridgeSystemPrompt(messages: Array<{ role: string, content: unknown }>): string | undefined {
+  const systemMessage = messages.find(message => message.role === 'system')
+  const systemPrompt = extractTextContent(systemMessage?.content)
+  return systemPrompt || undefined
+}
+
 export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
   const llmStore = useLLM()
   const consciousnessStore = useConsciousnessStore()
@@ -342,6 +367,7 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
               stream: true as const,
               fileIds: uploadedFileIds,
               skillIds,
+              systemPrompt: extractBridgeSystemPrompt(newMessages as Array<{ role: string, content: unknown }>),
               messages: [{ role: 'user' as const, content: sendingMessage }],
             } as any
 

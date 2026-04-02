@@ -118,6 +118,7 @@ interface LobsterBridgeChatRequest {
   messages: BridgeMessage[]
   fileIds?: string[]
   skillIds?: string[]
+  systemPrompt?: string
 }
 
 interface BridgeMessage {
