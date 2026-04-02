@@ -10,6 +10,7 @@ const props = defineProps<{
   enabled: boolean
   isListening: boolean
   normalizedVolume: number
+  canSend: boolean
   totalSkillsCount: number
   enabledSkillsCount: number
   activeProvider: string
@@ -20,6 +21,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   filesSelected: [event: Event]
+  send: []
   toggleListening: []
   updateSelectedAudioInput: [value: string]
   updateHearingTooltipOpen: [value: boolean]
@@ -161,5 +163,17 @@ function handleFileClick() {
     <div class="ml-auto text-xs opacity-60">
       {{ activeProvider === 'lobster-agent' ? `已启用 ${enabledSkillsCount} / 总技能 ${totalSkillsCount}` : '' }}
     </div>
+
+    <button
+      v-if="canSend"
+      class="h-8 w-8 flex items-center justify-center rounded-full outline-none transition-all duration-200 active:scale-95"
+      bg="primary-50/80 dark:neutral-100/80 hover:neutral-50"
+      text="neutral-500 hover:neutral-600 dark:neutral-900 dark:hover:neutral-800"
+      title="Send message"
+      aria-label="Send message"
+      @click="emit('send')"
+    >
+      <div class="i-solar:arrow-up-outline h-5 w-5" />
+    </button>
   </div>
 </template>
