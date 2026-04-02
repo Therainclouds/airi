@@ -1,9 +1,9 @@
 chat:
   message:
 character-name:
-  airi: Xclaw
-      core-system: 核心系统
-      you: 你
+  airi: Xclaw,
+  core-system: 核心系统
+  you: 你
   reasoning: 思考
 message: 说点什么...
 operations:
