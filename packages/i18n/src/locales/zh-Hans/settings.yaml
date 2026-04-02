@@ -768,62 +768,62 @@ pages:
     description: 管理 Lobster 技能列表、配置和下载安装入口
     title: 技能
     lobster:
-      total: "总技能"
-      enabledCount: "已启用"
-      manage: "管理技能"
-      installed: "已安装技能"
-      list: "技能列表"
-      listDesc: "查看当前技能状态，启停技能，并打开配置编辑。"
-      add: "添加技能"
-      addDesc: "支持通过 Git 仓库地址、本地路径或压缩包来源下载技能；高风险技能会先进入风险确认流程。"
-      source: "技能来源"
-      sourcePlaceholder: "输入 Git 地址、本地路径或可访问的技能包来源"
-      download: "下载并检查"
-      clear: "清空"
-      config: "技能配置"
-      configDesc: "选择一个技能后即可读取并编辑它的配置。"
-      configEmpty: "当前还没有配置项"
-      configEmptyDesc: "可以先新增一条配置，再保存到该技能的本地配置中。"
-      saveConfig: "保存配置"
-      addEntry: "新增配置项"
-      reRead: "重新读取"
-      serviceAddress: "服务地址"
-      defaultKeyWarning: "当前仍在使用默认 API Key"
-      defaultKeyWarningDesc: "建议先到 Provider 设置里配置独立的 Lobster API Key，再进行技能管理或下载安装。"
-      refresh: "刷新"
-      providerSettings: "Provider 设置"
-      filter: "筛选技能"
-      filterPlaceholder: "按名称、ID 或描述搜索"
-      noMatch: "暂无匹配技能"
-      noMatchDesc: "可以调整筛选条件，或者先从下方添加一个新的技能来源。"
-      enable: "启用"
-      disable: "停用"
-      statusEnabled: "已启用"
-      statusDisabled: "已停用"
-      builtin: "内置"
-      configure: "配置"
-      configKey: "配置键"
-      configKeyPlaceholder: "例如 API_KEY"
-      configValue: "配置值"
-      configValuePlaceholder: "输入配置值"
-      configValueSensitive: "输入敏感值"
-      show: "显示"
-      hide: "隐藏"
-      delete: "删除"
-      duplicateKeys: "检测到重复配置键"
-      noSkillSelected: "尚未选择技能"
-      noSkillSelectedDesc: "请先在左侧技能列表中点击"配置"，再在这里编辑当前技能的自定义参数。"
-      riskConfirm: "风险确认"
-      riskFindings: "条可见风险项"
-      install: "安装并启用"
-      installDisabled: "安装为禁用"
-      cancel: "取消"
-      unknown: "未知"
-      noDetails: "无详细说明"
+      total: '总技能'
+      enabledCount: '已启用'
+      manage: '管理技能'
+      installed: '已安装技能'
+      list: '技能列表'
+      listDesc: '查看当前技能状态，启停技能，并打开配置编辑。'
+      add: '添加技能'
+      addDesc: '支持通过 Git 仓库地址、本地路径或压缩包来源下载技能；高风险技能会先进入风险确认流程。'
+      source: '技能来源'
+      sourcePlaceholder: '输入 Git 地址、本地路径或可访问的技能包来源'
+      download: '下载并检查'
+      clear: '清空'
+      config: '技能配置'
+      configDesc: '选择一个技能后即可读取并编辑它的配置。'
+      configEmpty: '当前还没有配置项'
+      configEmptyDesc: '可以先新增一条配置，再保存到该技能的本地配置中。'
+      saveConfig: '保存配置'
+      addEntry: '新增配置项'
+      reRead: '重新读取'
+      serviceAddress: '服务地址'
+      defaultKeyWarning: '当前仍在使用默认 API Key'
+      defaultKeyWarningDesc: '建议先到 Provider 设置里配置独立的 Lobster API Key，再进行技能管理或下载安装。'
+      refresh: '刷新'
+      providerSettings: 'Provider 设置'
+      filter: '筛选技能'
+      filterPlaceholder: '按名称、ID 或描述搜索'
+      noMatch: '暂无匹配技能'
+      noMatchDesc: '可以调整筛选条件，或者先从下方添加一个新的技能来源。'
+      enable: '启用'
+      disable: '停用'
+      statusEnabled: '已启用'
+      statusDisabled: '已停用'
+      builtin: '内置'
+      configure: '配置'
+      configKey: '配置键'
+      configKeyPlaceholder: '例如 API_KEY'
+      configValue: '配置值'
+      configValuePlaceholder: '输入配置值'
+      configValueSensitive: '输入敏感值'
+      show: '显示'
+      hide: '隐藏'
+      delete: '删除'
+      duplicateKeys: '检测到重复配置键'
+      noSkillSelected: '尚未选择技能'
+      noSkillSelectedDesc: '请先在左侧技能列表中点击"配置"，再在这里编辑当前技能的自定义参数。'
+      riskConfirm: '风险确认'
+      riskFindings: '条可见风险项'
+      install: '安装并启用'
+      installDisabled: '安装为禁用'
+      cancel: '取消'
+      unknown: '未知'
+      noDetails: '无详细说明'
       permission:
-        allow: "允许"
-        deny: "拒绝"
-        tool: "工具"
+        allow: '允许'
+        deny: '拒绝'
+        tool: '工具'
   scene:
     description: 配置角色所在环境
     title: 场景
