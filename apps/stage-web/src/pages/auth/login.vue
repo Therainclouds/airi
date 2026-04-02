@@ -51,7 +51,7 @@ watch(isDesktop, (val) => {
 <template>
   <div v-if="isDesktop" class="min-h-screen flex flex-col items-center justify-center">
     <div class="mb-8 text-3xl font-bold">
-      Sign in to AIRI Stage
+      Sign in to Xclaw Stage
     </div>
     <div class="max-w-xs w-full flex flex-col gap-3">
       <Button

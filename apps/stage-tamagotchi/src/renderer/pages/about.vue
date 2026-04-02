@@ -67,7 +67,7 @@ const releaseNotesContent = computed(() => {
     ]"
   >
     <div :class="['mx-auto max-w-[min(960px,calc(100%-2rem))]', 'px-6 py-20']">
-      <AboutContent title="Project" highlight="AIRI" subtitle="Desktop ver." />
+      <AboutContent title="Project" highlight="Xclaw" subtitle="Desktop ver." />
 
       <!-- Main Content Card -->
       <div :class="['mb-12', 'rounded-2xl', 'bg-white/50 dark:bg-black/20', 'p-6', 'backdrop-blur-sm']">

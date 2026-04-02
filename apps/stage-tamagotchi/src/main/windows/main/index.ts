@@ -63,10 +63,10 @@ export async function setupMainWindow(params: {
 
   setupConfig()
 
-  const mainWindowConfig = getConfig().windows?.find(w => w.title === 'AIRI' && w.tag === 'main')
+  const mainWindowConfig = getConfig().windows?.find(w => w.title === 'Xclaw' && w.tag === 'main')
 
   const window = new BrowserWindow({
-    title: 'AIRI',
+    title: 'Xclaw',
     width: mainWindowConfig?.width ?? 450.0,
     height: mainWindowConfig?.height ?? 600.0,
     x: mainWindowConfig?.x,

@@ -127,8 +127,8 @@ export default defineConfig({
           registerType: 'autoUpdate',
           includeAssets: ['favicon.svg', 'apple-touch-icon.png'],
           manifest: {
-            name: 'AIRI',
-            short_name: 'AIRI',
+            name: 'Xclaw',
+            short_name: 'Xclaw',
             icons: [
               {
                 src: '/web-app-manifest-192x192.png',

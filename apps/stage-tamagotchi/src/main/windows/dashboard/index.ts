@@ -56,10 +56,10 @@ export async function setupDashboardWindow(params: {
 
   setupConfig()
 
-  const windowConfig = getConfig().windows?.find(w => w.title === 'AIRI Dashboard' && w.tag === 'dashboard')
+  const windowConfig = getConfig().windows?.find(w => w.title === 'Xclaw Dashboard' && w.tag === 'dashboard')
 
   const window = new BrowserWindow({
-    title: 'AIRI Dashboard',
+    title: 'Xclaw Dashboard',
     width: windowConfig?.width ?? 1200.0,
     height: windowConfig?.height ?? 600.0,
     x: windowConfig?.x,

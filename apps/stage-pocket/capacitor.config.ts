@@ -6,7 +6,7 @@ const serverURL = env.CAPACITOR_DEV_SERVER_URL
 
 const config: CapacitorConfig = {
   appId: 'ai.moeru.airi',
-  appName: 'AIRI',
+  appName: 'Xclaw',
   webDir: 'dist',
   server: serverURL
     ? {
