@@ -13,7 +13,7 @@ const backgroundDialogOpen = ref(false)
 
 <template>
   <BackgroundDialogPicker v-model="backgroundDialogOpen" />
-  <div absolute bottom--8 right-0 flex gap-2>
+  <div class="mt-2 flex justify-end gap-2 pr-2">
     <button
       class="max-h-[10lh] min-h-[1lh]"
       bg="neutral-100 dark:neutral-800"
