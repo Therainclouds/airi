@@ -13,6 +13,7 @@ import { ref, toRaw } from 'vue'
 import { useAnalytics } from '../composables'
 import { useLlmmarkerParser } from '../composables/llm-marker-parser'
 import { categorizeResponse, createStreamingCategorizer } from '../composables/response-categoriser'
+import { shouldAttemptBridge, shouldUseStandardLlmStream } from './chat-bridge-mode'
 import { createDatetimeContext } from './chat/context-providers'
 import { useChatContextStore } from './chat/context-store'
 import { createChatHooks } from './chat/hooks'
@@ -344,7 +345,7 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
       try {
         // NOTICE: T033-T034 -- Bridge path with fallback to standard LLM stream
         // If useBridge is false (feature flag) or Bridge fails, fall back to /v1/chat/completions
-        const useBridge = options.bridgeOptions?.useBridge !== false
+        const useBridge = shouldAttemptBridge(options.bridgeOptions)
         let bridgeFailed = false
 
         if (options.bridgeOptions && useBridge) {
@@ -470,7 +471,7 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
         }
 
         // Standard path: use llmStore.stream (always if no bridgeOptions, or if Bridge failed/disabled)
-        if (!options.bridgeOptions || bridgeFailed) {
+        if (shouldUseStandardLlmStream(options.bridgeOptions, bridgeFailed)) {
           await Promise.race([
             llmStore.stream(options.model, options.chatProvider, newMessages as Message[], {
               headers,
