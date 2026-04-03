@@ -59,31 +59,6 @@ interface QueuedSend {
   }
 }
 
-function extractTextContent(content: unknown): string {
-  if (typeof content === 'string')
-    return content
-
-  if (!Array.isArray(content))
-    return ''
-
-  return content
-    .map((part) => {
-      if (typeof part === 'string')
-        return part
-      if (part && typeof part === 'object' && 'text' in part)
-        return String(part.text ?? '')
-      return ''
-    })
-    .join('')
-    .trim()
-}
-
-function extractBridgeSystemPrompt(messages: Array<{ role: string, content: unknown }>): string | undefined {
-  const systemMessage = messages.find(message => message.role === 'system')
-  const systemPrompt = extractTextContent(systemMessage?.content)
-  return systemPrompt || undefined
-}
-
 export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
   const llmStore = useLLM()
   const consciousnessStore = useConsciousnessStore()
@@ -323,7 +298,7 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
 
       let fullText = ''
       const headers = (options.providerConfig?.headers || {}) as Record<string, string>
-      const streamTimeoutMs = 25000
+      const streamTimeoutMs = 180000
       let streamTimeoutId: ReturnType<typeof setTimeout> | undefined
       let timeoutReject: ((err: Error) => void) | null = null
       const timeoutPromise = new Promise<void>((_, reject) => {
@@ -368,7 +343,6 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
               stream: true as const,
               fileIds: uploadedFileIds,
               skillIds,
-              systemPrompt: extractBridgeSystemPrompt(newMessages as Array<{ role: string, content: unknown }>),
               messages: [{ role: 'user' as const, content: sendingMessage }],
             } as any
 
@@ -424,19 +398,9 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
                   break
                 }
                 case 'reasoning.delta': {
-                  const delta = (event as any).payload?.delta ?? ''
-                  if (delta) {
-                    buildingMessage.categorization = buildingMessage.categorization ?? { speech: '', reasoning: '' }
-                    buildingMessage.categorization.reasoning += delta
-                    updateUI()
-                  }
                   break
                 }
                 case 'reasoning.final': {
-                  const finalReasoning = (event as any).payload?.content ?? ''
-                  buildingMessage.categorization = buildingMessage.categorization ?? { speech: '', reasoning: '' }
-                  buildingMessage.categorization.reasoning = finalReasoning
-                  updateUI()
                   break
                 }
                 case 'tool.call': {

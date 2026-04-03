@@ -14,7 +14,8 @@ const props = defineProps<{
 
 const { t } = useI18n()
 
-const hasReasoning = computed(() => !!props.message.categorization?.reasoning?.trim())
+const shouldShowReasoning = typeof localStorage !== 'undefined' && localStorage.getItem('debug/show-chat-reasoning') === 'true'
+const hasReasoning = computed(() => shouldShowReasoning && !!props.message.categorization?.reasoning?.trim())
 
 const containerClasses = computed(() => [
   'mt-2',

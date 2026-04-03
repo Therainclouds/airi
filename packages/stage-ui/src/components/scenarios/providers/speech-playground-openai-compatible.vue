@@ -3,6 +3,7 @@ import { FieldCheckbox, FieldInput } from '@proj-airi/ui'
 import { computed, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 
+import { createAudioPreviewUrl, playAudioPreview } from '../../../utils'
 import { TestDummyMarker } from '../../gadgets'
 
 const props = defineProps<{
@@ -60,14 +61,8 @@ async function handleGenerateTestSpeech() {
     const response = await props.generateSpeech(input, voice.value, useSSML.value, model.value)
 
     // Convert the response to a blob and create an object URL
-    audioUrl.value = URL.createObjectURL(new Blob([response]))
-
-    // Play the audio
-    setTimeout(() => {
-      if (audioPlayer.value) {
-        audioPlayer.value.play()
-      }
-    }, 100)
+    audioUrl.value = createAudioPreviewUrl(response)
+    await playAudioPreview(audioPlayer.value, response, audioUrl.value)
   }
   catch (error) {
     console.error('Error generating speech:', error)

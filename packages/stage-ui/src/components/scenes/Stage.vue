@@ -817,9 +817,9 @@ const speechPipeline = createSpeechPipeline<AudioBuffer>({
   },
   playback: playbackManager,
   segmenter: (tokens, meta) => createTtsSegmentStream(tokens, meta, {
-    boost: 0,
-    minimumWords: 8,
-    maximumWords: 24,
+    boost: 2,
+    minimumWords: 3,
+    maximumWords: 12,
   }),
 })
 

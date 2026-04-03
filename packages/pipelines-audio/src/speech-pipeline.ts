@@ -58,6 +58,7 @@ export function createSpeechPipeline<TAudio>(options: SpeechPipelineOptions<TAud
   const logger = options.logger ?? console
   const priorityResolver = options.priority ?? createPriorityResolver()
   const segmenter = options.segmenter ?? createTtsSegmentStream
+  const ttsConcurrency = 2
   const context = createContext()
 
   const intents = new Map<string, IntentState>()
@@ -89,6 +90,60 @@ export function createSpeechPipeline<TAudio>(options: SpeechPipelineOptions<TAud
 
     try {
       const reader = segmentStream.getReader()
+      const pendingResults = new Map<number, Promise<{ request: TtsRequest, audio: TAudio | null } | null>>()
+      let requestIndex = 0
+      let nextScheduleIndex = 0
+
+      const scheduleTtsResult = (request: TtsRequest, audio: TAudio | null) => {
+        if (intent.controller.signal.aborted || !audio)
+          return
+
+        const ttsResult: TtsResult<TAudio> = {
+          streamId: request.streamId,
+          intentId: request.intentId,
+          segmentId: request.segmentId,
+          text: request.text,
+          special: request.special,
+          audio,
+          createdAt: Date.now(),
+        }
+
+        context.emit(speechPipelineEventMap.onTtsResult, ttsResult)
+
+        options.playback.schedule({
+          id: createId('playback'),
+          streamId: ttsResult.streamId,
+          intentId: ttsResult.intentId,
+          segmentId: ttsResult.segmentId,
+          ownerId: intent.ownerId,
+          priority: intent.priority,
+          text: ttsResult.text,
+          special: ttsResult.special,
+          audio: ttsResult.audio,
+          createdAt: Date.now(),
+        })
+      }
+
+      const flushReadyResults = async (force = false) => {
+        while (pendingResults.size > 0) {
+          const current = pendingResults.get(nextScheduleIndex)
+          if (!current) {
+            if (!force)
+              break
+            nextScheduleIndex += 1
+            continue
+          }
+
+          const resolved = await current
+          pendingResults.delete(nextScheduleIndex)
+          nextScheduleIndex += 1
+
+          if (!resolved)
+            continue
+
+          scheduleTtsResult(resolved.request, resolved.audio)
+        }
+      }
 
       while (true) {
         const { value, done } = await reader.read()
@@ -120,49 +175,25 @@ export function createSpeechPipeline<TAudio>(options: SpeechPipelineOptions<TAud
 
         context.emit(speechPipelineEventMap.onTtsRequest, request)
 
-        let audio: TAudio | null = null
-        try {
-          audio = await options.tts(request, intent.controller.signal)
-        }
-        catch (err) {
-          logger.warn('TTS generation failed:', err)
-          if (intent.controller.signal.aborted)
-            break
-          continue
-        }
+        const currentIndex = requestIndex++
+        pendingResults.set(currentIndex, (async () => {
+          try {
+            const audio = await options.tts(request, intent.controller.signal)
+            return { request, audio }
+          }
+          catch (err) {
+            logger.warn('TTS generation failed:', err)
+            if (intent.controller.signal.aborted)
+              return null
+            return { request, audio: null }
+          }
+        })())
 
-        if (intent.controller.signal.aborted)
-          break
-
-        if (!audio)
-          continue
-
-        const ttsResult: TtsResult<TAudio> = {
-          streamId: request.streamId,
-          intentId: request.intentId,
-          segmentId: request.segmentId,
-          text: request.text,
-          special: request.special,
-          audio,
-          createdAt: Date.now(),
-        }
-
-        context.emit(speechPipelineEventMap.onTtsResult, ttsResult)
-
-        options.playback.schedule({
-          id: createId('playback'),
-          streamId: ttsResult.streamId,
-          intentId: ttsResult.intentId,
-          segmentId: ttsResult.segmentId,
-          ownerId: intent.ownerId,
-          priority: intent.priority,
-          text: ttsResult.text,
-          special: ttsResult.special,
-          audio: ttsResult.audio,
-          createdAt: Date.now(),
-        })
+        if (pendingResults.size >= ttsConcurrency)
+          await flushReadyResults()
       }
 
+      await flushReadyResults(true)
       reader.releaseLock()
     }
     catch (err) {
