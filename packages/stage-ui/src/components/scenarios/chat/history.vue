@@ -24,10 +24,20 @@ const props = withDefaults(defineProps<{
 const chatHistoryRef = ref<HTMLDivElement>()
 
 const { t } = useI18n()
+function resolveLabel(key: string, fallback: string) {
+  try {
+    const value = t(key)
+    return typeof value === 'string' && value.trim() ? value : fallback
+  }
+  catch {
+    return fallback
+  }
+}
+
 const labels = computed(() => ({
-  assistant: props.assistantLabel ?? t('stage.chat.message.character-name.airi'),
-  user: props.userLabel ?? t('stage.chat.message.character-name.you'),
-  error: props.errorLabel ?? t('stage.chat.message.character-name.core-system'),
+  assistant: props.assistantLabel ?? resolveLabel('stage.chat.message.character-name.airi', 'Xclaw'),
+  user: props.userLabel ?? resolveLabel('stage.chat.message.character-name.you', '你'),
+  error: props.errorLabel ?? resolveLabel('stage.chat.message.character-name.core-system', '核心系统'),
 }))
 
 function scrollToBottom() {
@@ -57,24 +67,25 @@ function shouldShowPlaceholder(message: ChatHistoryItem) {
 }
 const renderMessages = computed<ChatHistoryItem[]>(() => {
   if (!props.sending)
-    return props.messages
+    return props.messages.filter((message): message is ChatHistoryItem => !!message && typeof message === 'object' && 'role' in message)
 
   const streamTs = streamingTs.value
   if (!streamTs)
-    return props.messages
+    return props.messages.filter((message): message is ChatHistoryItem => !!message && typeof message === 'object' && 'role' in message)
 
-  const hasStreamAlready = streamTs && props.messages.some(msg => msg?.role === 'assistant' && msg?.createdAt === streamTs)
+  const normalizedMessages = props.messages.filter((message): message is ChatHistoryItem => !!message && typeof message === 'object' && 'role' in message)
+  const hasStreamAlready = streamTs && normalizedMessages.some(msg => msg?.role === 'assistant' && msg?.createdAt === streamTs)
   if (hasStreamAlready)
-    return props.messages
+    return normalizedMessages
 
-  return [...props.messages, streaming.value]
+  return [...normalizedMessages, streaming.value]
 })
 </script>
 
 <template>
   <div ref="chatHistoryRef" v-auto-animate flex="~ col" relative h-full w-full overflow-y-auto rounded-xl px="<sm:2" py="<sm:2" :class="variant === 'mobile' ? 'gap-1' : 'gap-2'">
     <template v-for="(message, index) in renderMessages" :key="message?.createdAt ?? index">
-      <div v-if="message.role === 'error'">
+      <div v-if="message?.role === 'error'">
         <ChatErrorItem
           :message="message"
           :label="labels.error"
@@ -83,7 +94,7 @@ const renderMessages = computed<ChatHistoryItem[]>(() => {
         />
       </div>
 
-      <div v-else-if="message.role === 'assistant'">
+      <div v-else-if="message?.role === 'assistant'">
         <ChatAssistantItem
           :message="message"
           :label="labels.assistant"
@@ -92,7 +103,7 @@ const renderMessages = computed<ChatHistoryItem[]>(() => {
         />
       </div>
 
-      <div v-else-if="message.role === 'user'">
+      <div v-else-if="message?.role === 'user'">
         <ChatUserItem
           :message="message"
           :label="labels.user"

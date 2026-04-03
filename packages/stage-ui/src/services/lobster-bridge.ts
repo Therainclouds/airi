@@ -279,42 +279,122 @@ export async function* streamChat(
         }
 
         const eventType = json.type as string
+        const normalizedEvent = (() => {
+          switch (eventType) {
+            case 'state.changed':
+              return {
+                ...json,
+                payload: {
+                  state: (json as any).payload?.state ?? json.state,
+                  emotion: (json as any).payload?.emotion ?? json.emotion,
+                  meta: (json as any).payload?.meta ?? json.meta,
+                },
+              }
+            case 'permission.request':
+              return {
+                ...json,
+                payload: {
+                  requestId: (json as any).payload?.requestId ?? json.requestId,
+                  capabilityToken: (json as any).payload?.capabilityToken ?? json.capabilityToken,
+                  toolName: (json as any).payload?.toolName ?? json.toolName,
+                  toolInput: (json as any).payload?.toolInput ?? json.toolInput,
+                  expiresAt: (json as any).payload?.expiresAt ?? json.expiresAt,
+                },
+              }
+            case 'assistant.delta':
+              return {
+                ...json,
+                payload: {
+                  delta: (json as any).payload?.delta ?? json.text ?? '',
+                },
+              }
+            case 'assistant.final':
+              return {
+                ...json,
+                payload: {
+                  content: (json as any).payload?.content ?? json.text ?? '',
+                },
+              }
+            case 'reasoning.delta':
+              return {
+                ...json,
+                payload: {
+                  delta: (json as any).payload?.delta ?? json.text ?? '',
+                },
+              }
+            case 'reasoning.final':
+              return {
+                ...json,
+                payload: {
+                  content: (json as any).payload?.content ?? json.text ?? '',
+                },
+              }
+            case 'tool.call':
+              return {
+                ...json,
+                payload: {
+                  id: (json as any).payload?.id ?? json.toolCallId,
+                  name: (json as any).payload?.name ?? json.name,
+                  input: (json as any).payload?.input ?? json.arguments,
+                },
+              }
+            case 'tool.result':
+              return {
+                ...json,
+                payload: {
+                  id: (json as any).payload?.id ?? json.toolCallId,
+                  result: (json as any).payload?.result ?? json.result,
+                  isError: (json as any).payload?.isError ?? json.isError,
+                },
+              }
+            case 'error':
+              return {
+                ...json,
+                payload: {
+                  message: (json as any).payload?.message ?? json.message ?? 'Lobster Bridge error',
+                  code: (json as any).payload?.code ?? json.code,
+                },
+              }
+            default:
+              return json
+          }
+        })()
 
         // Dispatch side-effect events via callbacks
         if (eventType === 'state.changed' && onStateChange) {
-          onStateChange((json as unknown as StateChangedEvent).payload.state)
+          onStateChange((normalizedEvent as unknown as StateChangedEvent).payload.state)
           continue
         }
         if (eventType === 'permission.request' && onPermissionRequest) {
-          onPermissionRequest((json as unknown as PermissionRequestEvent).payload)
+          onPermissionRequest((normalizedEvent as unknown as PermissionRequestEvent).payload)
           continue
         }
 
         // Yield all other events for the caller to process
         switch (eventType) {
           case 'assistant.delta':
-            yield json as unknown as AssistantDeltaEvent
+            yield normalizedEvent as unknown as AssistantDeltaEvent
             break
           case 'assistant.final':
-            yield json as unknown as AssistantFinalEvent
+            yield normalizedEvent as unknown as AssistantFinalEvent
             break
           case 'reasoning.delta':
-            yield json as unknown as ReasoningDeltaEvent
+            yield normalizedEvent as unknown as ReasoningDeltaEvent
             break
           case 'reasoning.final':
-            yield json as unknown as ReasoningFinalEvent
+            yield normalizedEvent as unknown as ReasoningFinalEvent
             break
           case 'tool.call':
-            yield json as unknown as ToolCallEvent
+            yield normalizedEvent as unknown as ToolCallEvent
             break
           case 'tool.result':
-            yield json as unknown as ToolResultEvent
+            yield normalizedEvent as unknown as ToolResultEvent
             break
           case 'done':
-            yield json as unknown as DoneEvent
+            yield normalizedEvent as unknown as DoneEvent
             return
           case 'error': {
-            const errorEvent = json as unknown as ErrorEvent
+            const errorEvent = normalizedEvent as unknown as ErrorEvent
             throw new LobsterBridgeError(
               errorEvent.payload?.message ?? 'Lobster Bridge error',
               errorEvent.payload?.code,
@@ -327,7 +407,7 @@ export async function* streamChat(
             break
           default:
             // Unknown event type -- yield as-is for forward compatibility
-            yield json as unknown as LobsterBridgeEvent
+            yield normalizedEvent as unknown as LobsterBridgeEvent
         }
       }
     }

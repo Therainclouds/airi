@@ -406,9 +406,20 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
                 }
                 case 'assistant.final': {
                   const finalContent = (event as any).payload?.content ?? ''
-                  if (finalContent && finalContent !== fullText) {
-                    // Reconciliation: if final differs from accumulated, use final
-                    fullText = finalContent
+                  if (finalContent) {
+                    if (!fullText) {
+                      fullText = finalContent
+                      await parser.consume(finalContent)
+                    }
+                    else if (finalContent.startsWith(fullText)) {
+                      const suffix = finalContent.slice(fullText.length)
+                      fullText = finalContent
+                      if (suffix)
+                        await parser.consume(suffix)
+                    }
+                    else if (finalContent !== fullText) {
+                      fullText = finalContent
+                    }
                   }
                   break
                 }
@@ -517,7 +528,15 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
 
       await parser.end()
 
-      if (!isStaleGeneration() && buildingMessage.slices.length > 0) {
+      if (
+        !isStaleGeneration()
+        && (
+          buildingMessage.slices.length > 0
+          || (typeof buildingMessage.content === 'string' && buildingMessage.content.trim().length > 0)
+          || buildingMessage.tool_results.length > 0
+          || Boolean(buildingMessage.categorization?.reasoning?.trim())
+        )
+      ) {
         sessionMessagesForSend.push(toRaw(buildingMessage))
         chatSession.persistSessionMessages(sessionId)
       }

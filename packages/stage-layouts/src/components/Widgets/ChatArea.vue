@@ -117,9 +117,7 @@ async function loadLobsterSkills() {
 
 function syncSelectedLobsterSkillIds() {
   const availableIds = new Set(lobsterSkills.value.map(skill => skill.id))
-  const retained = selectedLobsterSkillIds.value.filter(id => availableIds.has(id))
-  const defaults = lobsterSkills.value.filter(skill => skill.enabled).map(skill => skill.id)
-  selectedLobsterSkillIds.value = Array.from(new Set(retained.length > 0 ? retained : defaults))
+  selectedLobsterSkillIds.value = selectedLobsterSkillIds.value.filter(id => availableIds.has(id))
 }
 
 function replacePendingLobsterPermissions(permissions: Array<{
@@ -315,7 +313,7 @@ async function handleSend() {
           baseUrl,
           apiKey,
           fileAttachments,
-          skillIds: selectedLobsterSkillIds.value,
+          skillIds: selectedLobsterSkillIds.value.length > 0 ? selectedLobsterSkillIds.value : undefined,
           useBridge: (providerConfig as any)?.useBridge !== false,
         },
       })
