@@ -6,6 +6,6 @@ export function shouldAttemptBridge(bridgeOptions?: ChatBridgeModeOptions | null
   return Boolean(bridgeOptions) && bridgeOptions?.useBridge !== false
 }
 
-export function shouldUseStandardLlmStream(bridgeOptions?: ChatBridgeModeOptions | null, bridgeFailed = false): boolean {
-  return !bridgeOptions || bridgeOptions.useBridge === false || bridgeFailed
+export function shouldUseStandardLlmStream(bridgeOptions?: ChatBridgeModeOptions | null): boolean {
+  return !bridgeOptions || bridgeOptions.useBridge === false
 }

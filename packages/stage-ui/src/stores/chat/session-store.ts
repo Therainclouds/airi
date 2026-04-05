@@ -1,5 +1,5 @@
 import type { ChatHistoryItem } from '../../types/chat'
-import type { ChatSessionMeta, ChatSessionRecord, ChatSessionsExport, ChatSessionsIndex } from '../../types/chat-session'
+import type { ChatSessionBridgeState, ChatSessionMeta, ChatSessionRecord, ChatSessionsExport, ChatSessionsIndex } from '../../types/chat-session'
 
 import { nanoid } from 'nanoid'
 import { defineStore, storeToRefs } from 'pinia'
@@ -241,6 +241,28 @@ export const useChatSessionStore = defineStore('chat-session', () => {
 
   function persistSessionMessages(sessionId: string) {
     void persistSession(sessionId)
+  }
+
+  function getSessionMeta(sessionId: string) {
+    return sessionMetas.value[sessionId] ?? null
+  }
+
+  function updateSessionMeta(sessionId: string, updater: (meta: ChatSessionMeta) => ChatSessionMeta) {
+    const current = sessionMetas.value[sessionId]
+    if (!current)
+      return
+    sessionMetas.value[sessionId] = updater(current)
+    void persistSession(sessionId)
+  }
+
+  function updateBridgeState(sessionId: string, updater: (bridgeState: ChatSessionBridgeState | undefined) => ChatSessionBridgeState | undefined) {
+    updateSessionMeta(sessionId, (meta) => {
+      const nextBridgeState = updater(meta.bridgeState)
+      return {
+        ...meta,
+        bridgeState: nextBridgeState,
+      }
+    })
   }
 
   function setSessionMessages(sessionId: string, next: ChatHistoryItem[]) {
@@ -545,6 +567,9 @@ export const useChatSessionStore = defineStore('chat-session', () => {
     ensureSession,
     setSessionMessages,
     persistSessionMessages,
+    getSessionMeta,
+    updateSessionMeta,
+    updateBridgeState,
     getSessionMessages,
     getSessionGeneration,
     bumpSessionGeneration,

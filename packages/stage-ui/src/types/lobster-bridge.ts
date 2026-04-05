@@ -30,6 +30,7 @@ interface SessionBoundEvent extends BridgeEventEnvelope {
   payload: {
     airiSessionId: string
     lobsterSessionId: string
+    sessionMode?: 'text-fast' | 'agent'
   }
 }
 
@@ -113,6 +114,8 @@ interface ErrorEvent extends BridgeEventEnvelope {
 
 interface LobsterBridgeChatRequest {
   airiSessionId: string
+  clientTurnId?: string
+  sessionMode?: 'auto' | 'text-fast' | 'agent'
   model: string
   stream: true
   messages: BridgeMessage[]
@@ -132,6 +135,7 @@ type BridgeContentPart
 
 interface FileUploadRequest {
   airiSessionId: string
+  clientTurnId?: string
   name: string
   mimeType: string
   base64Data: string
@@ -146,6 +150,22 @@ interface FileUploadResponse {
   }
 }
 
+interface FileReattachRequest {
+  airiSessionId: string
+  clientTurnId?: string
+  historyFileIds: string[]
+}
+
+interface FileReattachResponse {
+  files: Array<{
+    id: string
+    name: string
+    mimeType: string
+    size: number
+    sourceFileId: string
+  }>
+}
+
 interface SessionBindRequest {
   airiSessionId: string
 }
@@ -154,6 +174,7 @@ interface SessionBindResponse {
   session: {
     airiSessionId: string
     lobsterSessionId: string
+    sessionMode?: 'text-fast' | 'agent'
   }
 }
 
@@ -212,6 +233,7 @@ interface StreamLobsterBridgeOptions {
   apiKey: string
   request: LobsterBridgeChatRequest
   signal?: AbortSignal
+  onSessionBound?: (payload: SessionBoundEvent['payload']) => void
   onStateChange?: (state: StateChangedEvent['payload']['state']) => void
   onPermissionRequest?: (payload: PermissionRequestEvent['payload']) => void
 }
@@ -239,6 +261,8 @@ export type {
   BridgeMessage,
   DoneEvent,
   ErrorEvent,
+  FileReattachRequest,
+  FileReattachResponse,
   FileUploadRequest,
   FileUploadResponse,
   LobsterBridgeChatRequest,

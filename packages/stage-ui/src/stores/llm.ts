@@ -184,15 +184,29 @@ export async function attemptForToolsCompatibilityDiscovery(model: string, chatP
 
 export const useLLM = defineStore('llm', () => {
   const toolsCompatibility = ref<Map<string, boolean>>(new Map())
+  const discoveringToolsCompatibility = ref<Map<string, Promise<boolean>>>(new Map())
 
   async function discoverToolsCompatibility(model: string, chatProvider: ChatProvider, _: Message[], options?: Omit<StreamOptions, 'supportsTools'>) {
+    const key = `${chatProvider.chat(model).baseURL}-${model}`
+
     // Cached, no need to discover again
-    if (toolsCompatibility.value.has(`${chatProvider.chat(model).baseURL}-${model}`)) {
+    if (toolsCompatibility.value.has(key)) {
       return
     }
 
-    const res = await attemptForToolsCompatibilityDiscovery(model, chatProvider, _, { ...options, toolsCompatibility: toolsCompatibility.value })
-    toolsCompatibility.value.set(`${chatProvider.chat(model).baseURL}-${model}`, res)
+    if (discoveringToolsCompatibility.value.has(key)) {
+      await discoveringToolsCompatibility.value.get(key)
+      return
+    }
+
+    const discoveryPromise = attemptForToolsCompatibilityDiscovery(model, chatProvider, _, { ...options, toolsCompatibility: toolsCompatibility.value })
+    discoveringToolsCompatibility.value.set(key, discoveryPromise)
+
+    const res = await discoveryPromise.finally(() => {
+      discoveringToolsCompatibility.value.delete(key)
+    })
+
+    toolsCompatibility.value.set(key, res)
   }
 
   function stream(model: string, chatProvider: ChatProvider, messages: Message[], options?: StreamOptions) {

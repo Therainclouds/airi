@@ -1,9 +1,24 @@
 import { env } from 'node:process'
 
 import { createOpenRouter } from '@xsai-ext/providers/create'
-import { describe, expect, it } from 'vitest'
+import { createPinia, setActivePinia } from 'pinia'
+import { describe, expect, it, vi } from 'vitest'
 
-import { attemptForToolsCompatibilityDiscovery } from './llm'
+import { attemptForToolsCompatibilityDiscovery, useLLM } from './llm'
+
+const streamTextMock = vi.hoisted(() => vi.fn(async (options: any) => {
+  await Promise.resolve()
+  await options.onEvent?.({ type: 'finish' })
+}))
+
+vi.mock('@xsai/stream-text', () => ({
+  streamText: streamTextMock,
+}))
+
+vi.mock('../tools', () => ({
+  debug: vi.fn(async () => []),
+  mcp: vi.fn(async () => []),
+}))
 
 function doesHaveOpenRouterApiKey() {
   const apiKey = env.LLM_API_OPENROUTER_API_KEY
@@ -15,6 +30,32 @@ function doesHaveOpenRouterApiKey() {
 }
 
 const hasOpenRouterApiKey = doesHaveOpenRouterApiKey()
+
+describe('useLLM', () => {
+  it('should dedupe concurrent tools compatibility discovery for the same provider and model', async () => {
+    setActivePinia(createPinia())
+    streamTextMock.mockClear()
+
+    const store = useLLM()
+    const chatProvider = {
+      chat: () => ({
+        apiKey: 'test-key',
+        baseURL: 'http://127.0.0.1:19888/',
+      }),
+    }
+
+    await Promise.all([
+      store.discoverToolsCompatibility('claude-agent', chatProvider as any, []),
+      store.discoverToolsCompatibility('claude-agent', chatProvider as any, []),
+    ])
+
+    expect(streamTextMock).toHaveBeenCalledTimes(2)
+
+    await store.discoverToolsCompatibility('claude-agent', chatProvider as any, [])
+
+    expect(streamTextMock).toHaveBeenCalledTimes(2)
+  })
+})
 
 describe.skipIf(!hasOpenRouterApiKey)('llm store', { timeout: 60000 }, async () => {
   it('should be false for phi-4', async () => {

@@ -32,6 +32,18 @@ const providersStore = useProvidersStore()
 const { activeModel, activeProvider } = storeToRefs(useConsciousnessStore())
 const isComposing = ref(false)
 
+function shouldDiscoverActiveProviderToolsCompatibility() {
+  if (!activeProvider.value || !activeModel.value) {
+    return false
+  }
+
+  if (activeProvider.value === 'lobster-agent') {
+    return (providersStore.getProviderConfig(activeProvider.value) as Record<string, any>)?.useBridge === false
+  }
+
+  return true
+}
+
 async function handleSend() {
   if (isComposing.value) {
     return
@@ -104,7 +116,7 @@ function removeAttachment(index: number) {
 }
 
 watch([activeProvider, activeModel], async () => {
-  if (activeProvider.value && activeModel.value) {
+  if (shouldDiscoverActiveProviderToolsCompatibility()) {
     await discoverToolsCompatibility(activeModel.value, await providersStore.getProviderInstance<ChatProvider>(activeProvider.value), [])
   }
 }, { immediate: true })

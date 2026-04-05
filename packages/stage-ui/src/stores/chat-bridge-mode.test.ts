@@ -13,14 +13,14 @@ describe('chat bridge mode', () => {
   })
 
   it('falls back to standard stream when bridge is disabled', () => {
-    expect(shouldUseStandardLlmStream({ useBridge: false }, false)).toBe(true)
+    expect(shouldUseStandardLlmStream({ useBridge: false })).toBe(true)
   })
 
-  it('falls back to standard stream when bridge fails', () => {
-    expect(shouldUseStandardLlmStream({ useBridge: true }, true)).toBe(true)
+  it('does not silently fall back when bridge is enabled', () => {
+    expect(shouldUseStandardLlmStream({ useBridge: true })).toBe(false)
   })
 
   it('uses standard stream when bridge options are absent', () => {
-    expect(shouldUseStandardLlmStream(undefined, false)).toBe(true)
+    expect(shouldUseStandardLlmStream(undefined)).toBe(true)
   })
 })

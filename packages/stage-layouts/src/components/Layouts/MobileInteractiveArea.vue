@@ -58,6 +58,18 @@ const { audioContext } = useAudioContext()
 const { startAnalyzer, stopAnalyzer, volumeLevel } = useAudioAnalyzer()
 let analyzerSource: MediaStreamAudioSourceNode | undefined
 
+function shouldDiscoverActiveProviderToolsCompatibility() {
+  if (!activeProvider.value || !activeModel.value) {
+    return false
+  }
+
+  if (activeProvider.value === 'lobster-agent') {
+    return (providersStore.getProviderConfig(activeProvider.value) as Record<string, any>)?.useBridge === false
+  }
+
+  return true
+}
+
 function isMobileDevice() {
   return /Mobi|Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
 }
@@ -131,7 +143,7 @@ onAfterMessageComposed(async () => {
 })
 
 watch([activeProvider, activeModel], async () => {
-  if (activeProvider.value && activeModel.value) {
+  if (shouldDiscoverActiveProviderToolsCompatibility()) {
     await discoverToolsCompatibility(activeModel.value, await providersStore.getProviderInstance<ChatProvider>(activeProvider.value), [])
   }
 })

@@ -3,8 +3,10 @@ import type { ChatProvider } from '@xsai-ext/providers/utils'
 import type { CommonContentPart, Message, ToolMessage } from '@xsai/shared-chat'
 
 import type { ChatAssistantMessage, ChatHistoryItem, ChatSlices, ChatStreamEventContext, StreamingAssistantMessage } from '../types/chat'
+import type { ChatSessionBridgeFileRef, ChatSessionBridgeMode, ChatSessionBridgeState } from '../types/chat-session'
 import type { StreamEvent, StreamOptions } from './llm'
 
+import { defaultPerfTracer } from '@proj-airi/stage-shared'
 import { createQueue } from '@proj-airi/stream-kit'
 import { nanoid } from 'nanoid'
 import { defineStore, storeToRefs } from 'pinia'
@@ -24,6 +26,7 @@ import { useConsciousnessStore } from './modules/consciousness'
 
 interface LobsterBridgeOptions {
   fileAttachments?: Array<{ type: 'file', data: string, mimeType: string, name: string }>
+  reattachFileRefs?: Array<{ id: string, name: string, mimeType: string, size?: number }>
   skillIds?: string[]
   baseUrl: string
   apiKey: string
@@ -74,6 +77,112 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
   const sending = ref(false)
   const pendingQueuedSends = ref<QueuedSend[]>([])
   const hooks = createChatHooks()
+
+  function getPersistedBridgeFileRefs(sessionId: string): ChatSessionBridgeFileRef[] {
+    return chatSession.getSessionMeta(sessionId)?.bridgeState?.fileRefs ?? []
+  }
+
+  function getPersistedBridgeState(sessionId: string): ChatSessionBridgeState | undefined {
+    return chatSession.getSessionMeta(sessionId)?.bridgeState
+  }
+
+  function updatePersistedBridgeState(sessionId: string, updater: (bridgeState: ChatSessionBridgeState | undefined) => ChatSessionBridgeState | undefined) {
+    chatSession.updateBridgeState(sessionId, updater)
+  }
+
+  function setPersistedBridgeFileRefs(sessionId: string, fileRefs: ChatSessionBridgeFileRef[]) {
+    updatePersistedBridgeState(sessionId, bridgeState => ({
+      ...bridgeState,
+      fileRefs,
+    }))
+  }
+
+  function mergeBridgeFileRefs(
+    existing: ChatSessionBridgeFileRef[],
+    incoming: Array<{ id: string, name: string, mimeType: string, size?: number, lobsterSessionId?: string, clientTurnId?: string }>,
+  ): ChatSessionBridgeFileRef[] {
+    const merged = new Map(existing.map(file => [file.id, file]))
+    for (const file of incoming) {
+      merged.set(file.id, {
+        id: file.id,
+        name: file.name,
+        mimeType: file.mimeType,
+        size: file.size,
+        uploadedAt: Date.now(),
+        bindingState: 'active',
+        lobsterSessionId: file.lobsterSessionId,
+        clientTurnId: file.clientTurnId,
+      })
+    }
+    return Array.from(merged.values()).sort((a, b) => b.uploadedAt - a.uploadedAt)
+  }
+
+  function setBridgeBindingSnapshot(
+    sessionId: string,
+    payload: { lobsterSessionId?: string, sessionMode?: ChatSessionBridgeMode },
+  ) {
+    updatePersistedBridgeState(sessionId, (bridgeState) => {
+      const previousSessionId = bridgeState?.lobsterSessionId
+      const lobsterSessionId = payload.lobsterSessionId ?? previousSessionId
+      const bindingStatus = previousSessionId && lobsterSessionId && previousSessionId !== lobsterSessionId
+        ? 'rebound'
+        : 'bound'
+      return {
+        ...bridgeState,
+        lobsterSessionId,
+        sessionMode: payload.sessionMode ?? bridgeState?.sessionMode,
+        bindingStatus,
+        lastBoundAt: Date.now(),
+        fileRefs: (bridgeState?.fileRefs ?? []).map((file) => {
+          if (!previousSessionId || previousSessionId === lobsterSessionId) {
+            return file
+          }
+          return {
+            ...file,
+            bindingState: file.lobsterSessionId && file.lobsterSessionId !== lobsterSessionId ? 'stale' : file.bindingState,
+          }
+        }),
+      }
+    })
+  }
+
+  function markBridgeFilesState(sessionId: string, fileIds: string[], bindingState: 'active' | 'stale') {
+    if (fileIds.length === 0) {
+      return
+    }
+    const targetFileIds = new Set(fileIds)
+    updatePersistedBridgeState(sessionId, bridgeState => ({
+      ...bridgeState,
+      fileRefs: (bridgeState?.fileRefs ?? []).map(file => targetFileIds.has(file.id)
+        ? { ...file, bindingState }
+        : file),
+    }))
+  }
+
+  function resolveBridgeSessionMode(
+    sessionId: string,
+    options: Pick<LobsterBridgeOptions, 'fileAttachments' | 'reattachFileRefs' | 'skillIds'>,
+    imageAttachmentCount: number,
+  ): 'auto' | ChatSessionBridgeMode {
+    const persistedMode = getPersistedBridgeState(sessionId)?.sessionMode
+    const requiresAgent = Boolean(
+      persistedMode === 'agent'
+      || options.fileAttachments?.length
+      || options.reattachFileRefs?.length
+      || options.skillIds?.length
+      || imageAttachmentCount > 0,
+    )
+    return requiresAgent ? 'agent' : 'auto'
+  }
+
+  function extractBridgeErrorCode(error: unknown): string | undefined {
+    if (!error || typeof error !== 'object') {
+      return undefined
+    }
+    return typeof (error as Record<string, unknown>).code === 'string'
+      ? (error as Record<string, unknown>).code as string
+      : undefined
+  }
 
   const sendQueue = createQueue<QueuedSend>({
     handlers: [
@@ -133,6 +242,34 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
     const shouldAbort = () => isStaleGeneration()
     if (shouldAbort())
       return
+    const clientTurnId = String(streamingMessageContext.message.id)
+
+    const perfStartedAt = performance.now()
+    const useBridge = shouldAttemptBridge(options.bridgeOptions)
+    let firstVisibleTokenAt: number | null = null
+    let firstBridgeStateAt: number | null = null
+    const perfMetaBase = {
+      sessionId,
+      provider: activeProvider.value,
+      model: options.model,
+      transport: useBridge ? 'bridge' : 'standard',
+      imageAttachmentsCount: options.attachments?.length ?? 0,
+      fileAttachmentsCount: options.bridgeOptions?.fileAttachments?.length ?? 0,
+      skillIdsCount: options.bridgeOptions?.skillIds?.length ?? 0,
+    }
+    const emitChatPerfEvent = (name: string, duration?: number, meta?: Record<string, unknown>) => {
+      defaultPerfTracer.emit({
+        tracerId: 'chat',
+        name,
+        ts: perfStartedAt,
+        duration,
+        meta: {
+          ...perfMetaBase,
+          ...meta,
+        },
+      })
+    }
+    emitChatPerfEvent('turn.start')
 
     sending.value = true
 
@@ -200,6 +337,12 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
           streamPosition += literal.length
 
           if (speechOnly.trim()) {
+            if (firstVisibleTokenAt === null) {
+              firstVisibleTokenAt = performance.now()
+              emitChatPerfEvent('turn.first-visible-token', firstVisibleTokenAt - perfStartedAt, {
+                fullTextLength: fullText.length + speechOnly.length,
+              })
+            }
             buildingMessage.content += speechOnly
 
             await hooks.emitTokenLiteralHooks(speechOnly, streamingMessageContext)
@@ -318,30 +461,55 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
 
       scheduleStreamTimeout()
       try {
-        // NOTICE: T033-T034 -- Bridge path with fallback to standard LLM stream
-        // If useBridge is false (feature flag) or Bridge fails, fall back to /v1/chat/completions
-        const useBridge = shouldAttemptBridge(options.bridgeOptions)
-        let bridgeFailed = false
-
         if (options.bridgeOptions && useBridge) {
+          const requestedReattachFileIds = options.bridgeOptions.reattachFileRefs?.map(file => file.id) ?? []
           try {
             // Bridge path: use Lobster Bridge AsyncIterable stream
             const { streamChat } = await import('../services/lobster-bridge')
-            const { baseUrl, apiKey, fileAttachments, skillIds } = options.bridgeOptions
+            const { baseUrl, apiKey, fileAttachments, reattachFileRefs, skillIds } = options.bridgeOptions
+            const requestedSessionMode = resolveBridgeSessionMode(sessionId, { fileAttachments, reattachFileRefs, skillIds }, options.attachments?.length ?? 0)
 
-            // Upload file attachments if any
-            let uploadedFileIds: string[] = []
+            let resolvedBridgeFiles: Array<{ id: string, name: string, mimeType: string, size?: number }> = []
+            let uploadedBridgeFiles: Array<{ id: string, name: string, mimeType: string, size?: number }> = []
             if (fileAttachments?.length) {
               const { uploadFiles, bindSession } = await import('../services/lobster-bridge')
-              await bindSession(baseUrl, apiKey, sessionId)
-              uploadedFileIds = await uploadFiles(baseUrl, apiKey, sessionId, fileAttachments)
+              const binding = await bindSession(baseUrl, apiKey, sessionId)
+              setBridgeBindingSnapshot(sessionId, {
+                lobsterSessionId: binding.session.lobsterSessionId,
+                sessionMode: binding.session.sessionMode,
+              })
+              uploadedBridgeFiles = await uploadFiles(baseUrl, apiKey, sessionId, clientTurnId, fileAttachments)
+              resolvedBridgeFiles = [...resolvedBridgeFiles, ...uploadedBridgeFiles]
+              if (uploadedBridgeFiles.length > 0) {
+                setPersistedBridgeFileRefs(sessionId, mergeBridgeFileRefs(
+                  getPersistedBridgeFileRefs(sessionId),
+                  uploadedBridgeFiles.map(file => ({
+                    ...file,
+                    lobsterSessionId: binding.session.lobsterSessionId,
+                    clientTurnId,
+                  })),
+                ))
+              }
+            }
+            if (reattachFileRefs?.length) {
+              const { bindSession, reattachFiles } = await import('../services/lobster-bridge')
+              const binding = await bindSession(baseUrl, apiKey, sessionId)
+              setBridgeBindingSnapshot(sessionId, {
+                lobsterSessionId: binding.session.lobsterSessionId,
+                sessionMode: binding.session.sessionMode,
+              })
+              const reattachedFiles = await reattachFiles(baseUrl, apiKey, sessionId, clientTurnId, reattachFileRefs.map(file => file.id))
+              resolvedBridgeFiles = [...resolvedBridgeFiles, ...reattachedFiles]
+              markBridgeFilesState(sessionId, reattachFileRefs.map(file => file.id), 'active')
             }
 
             const bridgePayload = {
               airiSessionId: sessionId,
+              clientTurnId,
+              sessionMode: requestedSessionMode,
               model: options.model,
               stream: true as const,
-              fileIds: uploadedFileIds,
+              fileIds: resolvedBridgeFiles.map(file => file.id),
               skillIds,
               messages: [{ role: 'user' as const, content: sendingMessage }],
             } as any
@@ -350,7 +518,19 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
               baseUrl,
               apiKey,
               request: bridgePayload,
+              onSessionBound: (payload) => {
+                setBridgeBindingSnapshot(sessionId, {
+                  lobsterSessionId: payload.lobsterSessionId,
+                  sessionMode: payload.sessionMode,
+                })
+              },
               onStateChange: async (state: string) => {
+                if (firstBridgeStateAt === null) {
+                  firstBridgeStateAt = performance.now()
+                  emitChatPerfEvent('turn.bridge-first-state', firstBridgeStateAt - perfStartedAt, {
+                    state,
+                  })
+                }
                 await hooks.emitBridgeStateChangedHooks(state, streamingMessageContext)
               },
               onPermissionRequest: async (permPayload) => {
@@ -439,14 +619,15 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
             }
           }
           catch (bridgeError) {
-            // T034: Bridge fallback -- log and fall through to standard LLM stream
-            console.warn('[chat] Bridge stream failed, falling back to standard LLM stream:', bridgeError)
-            bridgeFailed = true
+            if (extractBridgeErrorCode(bridgeError) === 'bridge_file_missing') {
+              markBridgeFilesState(sessionId, requestedReattachFileIds, 'stale')
+            }
+            console.warn('[chat] Bridge stream failed:', bridgeError)
+            throw bridgeError
           }
         }
 
-        // Standard path: use llmStore.stream (always if no bridgeOptions, or if Bridge failed/disabled)
-        if (shouldUseStandardLlmStream(options.bridgeOptions, bridgeFailed)) {
+        if (shouldUseStandardLlmStream(options.bridgeOptions)) {
           await Promise.race([
             llmStore.stream(options.model, options.chatProvider, newMessages as Message[], {
               headers,
@@ -515,6 +696,12 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
         outputText: fullText,
         toolCalls: sessionMessagesForSend.filter(msg => msg.role === 'tool') as ToolMessage[],
       }, streamingMessageContext)
+      emitChatPerfEvent('turn.complete', performance.now() - perfStartedAt, {
+        outputLength: fullText.length,
+        receivedFirstVisibleToken: firstVisibleTokenAt !== null,
+        firstVisibleTokenMs: firstVisibleTokenAt === null ? null : firstVisibleTokenAt - perfStartedAt,
+        firstBridgeStateMs: firstBridgeStateAt === null ? null : firstBridgeStateAt - perfStartedAt,
+      })
 
       if (isForegroundSession()) {
         streamingMessage.value = { role: 'assistant', content: '', slices: [], tool_results: [] }
@@ -522,6 +709,11 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
     }
     catch (error) {
       console.error('Error sending message:', error)
+      emitChatPerfEvent('turn.error', performance.now() - perfStartedAt, {
+        firstVisibleTokenMs: firstVisibleTokenAt === null ? null : firstVisibleTokenAt - perfStartedAt,
+        firstBridgeStateMs: firstBridgeStateAt === null ? null : firstBridgeStateAt - perfStartedAt,
+        error: error instanceof Error ? error.message : String(error || ''),
+      })
       if (!isStaleGeneration()) {
         const message = error instanceof Error ? error.message : String(error || '')
         sessionMessagesForSend.push({

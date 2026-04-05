@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { ChatSessionBridgeFileRef } from '@proj-airi/stage-ui/types/chat-session'
 import type { ChatProvider } from '@xsai-ext/providers/utils'
 
 import { isStageTamagotchi } from '@proj-airi/stage-shared'
@@ -32,7 +33,9 @@ const hearingTooltipOpen = ref(false)
 const isComposing = ref(false)
 const isListening = ref(false) // Transcription listening state (separate from microphone enabled)
 
-interface ChatAttachment { type: 'image' | 'file', data: string, mimeType: string, name: string }
+type ChatAttachment
+  = | { source: 'local', type: 'image' | 'file', data: string, mimeType: string, name: string }
+    | { source: 'history', type: 'file', historyFileId: string, mimeType: string, name: string, size?: number }
 const attachments = ref<ChatAttachment[]>([])
 const selectedLobsterSkillIds = ref<string[]>([])
 const pendingLobsterPermissions = ref<Array<{
@@ -58,6 +61,7 @@ function handleFileChange(event: Event) {
       const mimeType = mimePart.split(':')[1]
 
       attachments.value.push({
+        source: 'local',
         type: file.type.startsWith('image/') ? 'image' : 'file',
         data,
         mimeType,
@@ -87,9 +91,32 @@ const { audioContext } = useAudioContext()
 const { t } = useI18n()
 const router = useRouter()
 const { skills: lobsterSkills, totalSkillsCount, enabledSkillsCount, refreshSkills: refreshLobsterSkills } = useLobsterSkills()
+const sessionBridgeFiles = computed<ChatSessionBridgeFileRef[]>(() => {
+  if (!activeSessionId.value) {
+    return []
+  }
+  return chatSession.getSessionMeta(activeSessionId.value)?.bridgeState?.fileRefs ?? []
+})
+const selectedHistoryFileIds = computed(() => new Set(
+  attachments.value
+    .filter((attachment): attachment is Extract<ChatAttachment, { source: 'history' }> => attachment.source === 'history')
+    .map(attachment => attachment.historyFileId),
+))
 
 function getLobsterProviderConfig() {
   return providersStore.getProviderConfig(activeProvider.value) as Record<string, any>
+}
+
+function shouldDiscoverActiveProviderToolsCompatibility() {
+  if (!activeProvider.value || !activeModel.value) {
+    return false
+  }
+
+  if (activeProvider.value === 'lobster-agent') {
+    return getLobsterProviderConfig()?.useBridge === false
+  }
+
+  return true
 }
 
 function openLobsterSkillsSettings() {
@@ -106,6 +133,90 @@ function getLobsterConnection() {
     baseUrl: normalizeBaseUrl(providerConfig?.baseUrl),
     apiKey: normalizeApiKey(providerConfig?.apiKey),
   }
+}
+
+function attachBridgeHistoryFile(file: ChatSessionBridgeFileRef) {
+  if (selectedHistoryFileIds.value.has(file.id) || file.bindingState === 'stale') {
+    return
+  }
+  attachments.value.push({
+    source: 'history',
+    type: 'file',
+    historyFileId: file.id,
+    mimeType: file.mimeType,
+    name: file.name,
+    size: file.size,
+  })
+}
+
+function resolveChatErrorMessage(error: unknown) {
+  const errorRecord = error && typeof error === 'object'
+    ? error as Record<string, unknown>
+    : null
+  const errorCode = typeof errorRecord?.code === 'string'
+    ? errorRecord.code
+    : undefined
+  const nestedMessage = typeof errorRecord?.message === 'string' && errorRecord.message.trim()
+    ? errorRecord.message.trim()
+    : undefined
+
+  if (errorCode === 'bridge_mode_locked')
+    return '当前会话已锁定为纯文本模式，请新建一个会话后再上传文件。'
+  if (error instanceof Error && error.message) {
+    return error.message
+  }
+  if (nestedMessage)
+    return nestedMessage
+  if (typeof error === 'string' && error.trim()) {
+    return error
+  }
+  return '发送失败，请检查当前会话模式或连接配置后重试。'
+}
+
+function extractBridgeErrorCode(error: unknown) {
+  if (!error || typeof error !== 'object')
+    return undefined
+  return typeof (error as Record<string, unknown>).code === 'string'
+    ? (error as Record<string, unknown>).code as string
+    : undefined
+}
+
+async function sendMessageToSession(textToSend: string, sendingAttachments: ChatAttachment[], targetSessionId?: string) {
+  const providerConfig = providersStore.getProviderConfig(activeProvider.value)
+
+  if (activeProvider.value === 'lobster-agent') {
+    const { baseUrl, apiKey } = getLobsterConnection()
+    const fileAttachments = sendingAttachments.filter((item): item is Extract<ChatAttachment, { source: 'local', type: 'file' }> => item.source === 'local' && item.type === 'file')
+    const reattachFileRefs = sendingAttachments
+      .filter((item): item is Extract<ChatAttachment, { source: 'history' }> => item.source === 'history')
+      .map(({ historyFileId, name, mimeType, size }) => ({ id: historyFileId, name, mimeType, size }))
+    await ingest(textToSend, {
+      chatProvider: await providersStore.getProviderInstance(activeProvider.value) as ChatProvider,
+      model: activeModel.value,
+      providerConfig,
+      attachments: sendingAttachments
+        .filter((item): item is Extract<ChatAttachment, { source: 'local', type: 'image' }> => item.source === 'local' && item.type === 'image')
+        .map(({ data, mimeType }) => ({ type: 'image' as const, data, mimeType })),
+      bridgeOptions: {
+        baseUrl,
+        apiKey,
+        fileAttachments,
+        reattachFileRefs,
+        skillIds: selectedLobsterSkillIds.value.length > 0 ? selectedLobsterSkillIds.value : undefined,
+        useBridge: (providerConfig as any)?.useBridge !== false,
+      },
+    }, targetSessionId)
+    return
+  }
+
+  await ingest(textToSend, {
+    chatProvider: await providersStore.getProviderInstance(activeProvider.value) as ChatProvider,
+    model: activeModel.value,
+    providerConfig,
+    attachments: sendingAttachments
+      .filter((item): item is Extract<ChatAttachment, { source: 'local', type: 'image' }> => item.source === 'local' && item.type === 'image')
+      .map(({ data, mimeType }) => ({ type: 'image' as const, data, mimeType })),
+  }, targetSessionId)
 }
 
 async function loadLobsterSkills() {
@@ -295,47 +406,41 @@ async function handleSend() {
   messageInput.value = ''
   const sendingAttachments = [...attachments.value]
   attachments.value = []
+  const originalSessionId = activeSessionId.value
+  const originalSessionMessages = originalSessionId
+    ? [...chatSession.getSessionMessages(originalSessionId)]
+    : []
 
   try {
-    const providerConfig = providersStore.getProviderConfig(activeProvider.value)
-
-    if (activeProvider.value === 'lobster-agent') {
-      const { baseUrl, apiKey } = getLobsterConnection()
-      const fileAttachments = sendingAttachments.filter((item): item is ChatAttachment & { type: 'file' } => item.type === 'file')
-      await ingest(textToSend, {
-        chatProvider: await providersStore.getProviderInstance(activeProvider.value) as ChatProvider,
-        model: activeModel.value,
-        providerConfig,
-        attachments: sendingAttachments
-          .filter((item): item is ChatAttachment & { type: 'image' } => item.type === 'image')
-          .map(({ data, mimeType }) => ({ type: 'image' as const, data, mimeType })),
-        bridgeOptions: {
-          baseUrl,
-          apiKey,
-          fileAttachments,
-          skillIds: selectedLobsterSkillIds.value.length > 0 ? selectedLobsterSkillIds.value : undefined,
-          useBridge: (providerConfig as any)?.useBridge !== false,
-        },
-      })
-    }
-    else {
-      await ingest(textToSend, {
-        chatProvider: await providersStore.getProviderInstance(activeProvider.value) as ChatProvider,
-        model: activeModel.value,
-        providerConfig,
-        attachments: sendingAttachments
-          .filter((item): item is ChatAttachment & { type: 'image' } => item.type === 'image')
-          .map(({ data, mimeType }) => ({ type: 'image' as const, data, mimeType })),
-      })
-    }
+    await sendMessageToSession(textToSend, sendingAttachments, originalSessionId)
   }
   catch (error) {
+    const hasBridgeFiles = sendingAttachments.some(attachment => attachment.type === 'file')
+    if (extractBridgeErrorCode(error) === 'bridge_mode_locked' && activeProvider.value === 'lobster-agent' && originalSessionId && hasBridgeFiles) {
+      chatSession.setSessionMessages(originalSessionId, originalSessionMessages)
+      try {
+        const forkSessionId = await chatSession.forkSession({
+          fromSessionId: originalSessionId,
+          atIndex: originalSessionMessages.length,
+          reason: 'bridge-mode-locked',
+        })
+        if (forkSessionId) {
+          chatSession.setActiveSession(forkSessionId)
+          await nextTick()
+          await sendMessageToSession(textToSend, sendingAttachments, forkSessionId)
+          return
+        }
+      }
+      catch (retryError) {
+        error = retryError
+      }
+    }
     messageInput.value = textToSend
     attachments.value = sendingAttachments
     messages.value.pop()
     messages.value.push({
       role: 'error',
-      content: (error as Error).message,
+      content: resolveChatErrorMessage(error),
     })
   }
 }
@@ -347,7 +452,7 @@ watch(hearingTooltipOpen, async (value) => {
 })
 
 watch([activeProvider, activeModel], async () => {
-  if (activeProvider.value && activeModel.value) {
+  if (shouldDiscoverActiveProviderToolsCompatibility()) {
     await discoverToolsCompatibility(activeModel.value, await providersStore.getProviderInstance<ChatProvider>(activeProvider.value), [])
   }
   if (activeProvider.value === 'lobster-agent') {
@@ -656,12 +761,14 @@ watch(autoSendEnabled, (enabled) => {
         'bg-primary-200/20 dark:bg-primary-400/20',
       ]"
     >
-      <!-- Attachments Preview -->
       <div v-if="attachments.length > 0" class="flex gap-2 overflow-x-auto px-4 pb-2 pt-4">
         <div v-for="(att, idx) in attachments" :key="idx" class="group relative shrink-0">
-          <img v-if="att.type === 'image'" :src="`data:${att.mimeType};base64,${att.data}`" class="h-16 w-16 border border-neutral-200 rounded-md object-cover shadow-sm dark:border-neutral-700">
-          <div v-else class="h-16 min-w-24 flex items-center border border-neutral-200 rounded-md bg-neutral-50 px-2 text-xs shadow-sm dark:border-neutral-700 dark:bg-neutral-800">
-            {{ att.name }}
+          <img v-if="att.source === 'local' && att.type === 'image'" :src="`data:${att.mimeType};base64,${att.data}`" class="h-16 w-16 border border-neutral-200 rounded-md object-cover shadow-sm dark:border-neutral-700">
+          <div v-else class="h-16 min-w-24 flex flex-col justify-center border border-neutral-200 rounded-md bg-neutral-50 px-2 text-xs shadow-sm dark:border-neutral-700 dark:bg-neutral-800">
+            <div>{{ att.name }}</div>
+            <div v-if="att.source === 'history'" class="mt-1 text-[10px] text-primary-600 dark:text-primary-300">
+              Re-attach
+            </div>
           </div>
           <button
             class="absolute rounded-full bg-red-500 p-0.5 text-white opacity-0 shadow-sm transition-opacity -right-1.5 -top-1.5 hover:bg-red-600 group-hover:opacity-100"
@@ -670,6 +777,18 @@ watch(autoSendEnabled, (enabled) => {
             <div class="i-ph:x h-3 w-3" />
           </button>
         </div>
+      </div>
+
+      <div v-if="activeProvider === 'lobster-agent' && sessionBridgeFiles.length > 0" class="flex flex-wrap gap-2 px-4 pb-2">
+        <button
+          v-for="file in sessionBridgeFiles"
+          :key="file.id"
+          class="border border-primary-300/60 rounded-full bg-white/70 px-3 py-1 text-xs text-primary-700 transition disabled:cursor-not-allowed dark:border-primary-500/40 dark:bg-neutral-900/50 hover:bg-primary-50 dark:text-primary-200 disabled:opacity-50"
+          :disabled="selectedHistoryFileIds.has(file.id) || file.bindingState === 'stale'"
+          @click="attachBridgeHistoryFile(file)"
+        >
+          {{ file.bindingState === 'stale' ? `需重传 · ${file.name}` : selectedHistoryFileIds.has(file.id) ? `已附加 · ${file.name}` : `重新附加 · ${file.name}` }}
+        </button>
       </div>
 
       <BasicTextarea

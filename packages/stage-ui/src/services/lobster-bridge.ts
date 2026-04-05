@@ -5,6 +5,8 @@ import type {
   BridgeMessage,
   DoneEvent,
   ErrorEvent,
+  FileReattachRequest,
+  FileReattachResponse,
   FileUploadRequest,
   FileUploadResponse,
   LobsterBridgeEvent,
@@ -15,6 +17,7 @@ import type {
   ReasoningFinalEvent,
   SessionBindRequest,
   SessionBindResponse,
+  SessionBoundEvent,
   SkillConfirmInstallRequest,
   SkillDownloadRequest,
   SkillDownloadResponse,
@@ -69,6 +72,38 @@ export function buildAuthHeaders(apiKey: string): HeadersInit {
   }
 }
 
+function extractApiErrorMessage(data: unknown, fallback: string): string {
+  if (!data || typeof data !== 'object')
+    return fallback
+  if (typeof (data as any).message === 'string' && (data as any).message.trim())
+    return (data as any).message.trim()
+  const nestedError = (data as any).error
+  if (typeof nestedError === 'string' && nestedError.trim())
+    return nestedError.trim()
+  if (nestedError && typeof nestedError === 'object' && typeof nestedError.message === 'string' && nestedError.message.trim())
+    return nestedError.message.trim()
+  return fallback
+}
+
+function extractApiErrorCode(data: unknown): string | undefined {
+  if (!data || typeof data !== 'object')
+    return undefined
+  if (typeof (data as any).code === 'string' && (data as any).code.trim())
+    return (data as any).code.trim()
+  const nestedError = (data as any).error
+  if (nestedError && typeof nestedError === 'object' && typeof nestedError.code === 'string' && nestedError.code.trim())
+    return nestedError.code.trim()
+  return undefined
+}
+
+function inferBridgeSessionMode(lobsterSessionId: string | undefined): 'text-fast' | 'agent' | undefined {
+  if (!lobsterSessionId)
+    return undefined
+  return lobsterSessionId.startsWith('text-fast:')
+    ? 'text-fast'
+    : 'agent'
+}
+
 // ==================== Session Management ====================
 
 /**
@@ -90,10 +125,14 @@ export async function bindSession(
   const data = await response.json().catch(() => null)
   if (!response.ok) {
     throw new LobsterBridgeError(
-      String(data?.error || data?.message || `bind session error (${response.status})`),
-      data?.code,
+      extractApiErrorMessage(data, `bind session error (${response.status})`),
+      extractApiErrorCode(data),
       response.status,
     )
+  }
+  const session = (data as SessionBindResponse)?.session
+  if (session) {
+    session.sessionMode = session.sessionMode ?? inferBridgeSessionMode(session.lobsterSessionId)
   }
   return data as SessionBindResponse
 }
@@ -111,12 +150,14 @@ export async function uploadFiles(
   baseUrl: string,
   apiKey: string,
   airiSessionId: string,
+  clientTurnId: string,
   fileAttachments: Array<{ type: 'file', data: string, mimeType: string, name: string }>,
-): Promise<string[]> {
-  const uploaded: string[] = []
+): Promise<Array<FileUploadResponse['file']>> {
+  const uploaded: Array<FileUploadResponse['file']> = []
   for (const attachment of fileAttachments) {
     const body: FileUploadRequest = {
       airiSessionId,
+      clientTurnId,
       name: attachment.name,
       mimeType: attachment.mimeType,
       base64Data: attachment.data,
@@ -129,17 +170,54 @@ export async function uploadFiles(
     const data = await response.json().catch(() => null) as FileUploadResponse | null
     if (!response.ok) {
       throw new LobsterBridgeError(
-        String(data?.file?.name ? `${data.file.name} upload failed` : `file upload error (${response.status})`),
-        undefined,
+        extractApiErrorMessage(data, data?.file?.name ? `${data.file.name} upload failed` : `file upload error (${response.status})`),
+        extractApiErrorCode(data),
         response.status,
       )
     }
-    const fileId = data?.file?.id
-    if (fileId) {
-      uploaded.push(fileId)
+    if (data?.file?.id) {
+      uploaded.push(data.file)
     }
   }
   return uploaded
+}
+
+export async function reattachFiles(
+  baseUrl: string,
+  apiKey: string,
+  airiSessionId: string,
+  clientTurnId: string,
+  historyFileIds: string[],
+): Promise<Array<FileUploadResponse['file']>> {
+  if (historyFileIds.length === 0) {
+    return []
+  }
+  const body: FileReattachRequest = {
+    airiSessionId,
+    clientTurnId,
+    historyFileIds,
+  }
+  const response = await fetch(`${baseUrl}/api/agent/files/reattach`, {
+    method: 'POST',
+    headers: buildAuthHeaders(apiKey),
+    body: JSON.stringify(body),
+  })
+  const data = await response.json().catch(() => null) as FileReattachResponse | null
+  if (!response.ok) {
+    throw new LobsterBridgeError(
+      extractApiErrorMessage(data, `file reattach error (${response.status})`),
+      extractApiErrorCode(data),
+      response.status,
+    )
+  }
+  return Array.isArray(data?.files)
+    ? data.files.map(file => ({
+        id: file.id,
+        name: file.name,
+        mimeType: file.mimeType,
+        size: file.size,
+      }))
+    : []
 }
 
 // ==================== Content Building ====================
@@ -221,7 +299,7 @@ export function buildBridgeMessages(
 export async function* streamChat(
   options: StreamLobsterBridgeOptions,
 ): AsyncIterable<LobsterBridgeEvent> {
-  const { baseUrl, apiKey, request, signal, onStateChange, onPermissionRequest } = options
+  const { baseUrl, apiKey, request, signal, onSessionBound, onStateChange, onPermissionRequest } = options
 
   const response = await fetch(`${baseUrl}/api/agent/bridge/chat`, {
     method: 'POST',
@@ -236,8 +314,8 @@ export async function* streamChat(
   if (!response.ok) {
     const data = await response.json().catch(() => null)
     throw new LobsterBridgeError(
-      String(data?.error || data?.message || `bridge chat error (${response.status})`),
-      data?.code,
+      extractApiErrorMessage(data, `bridge chat error (${response.status})`),
+      extractApiErrorCode(data),
       response.status,
     )
   }
@@ -281,6 +359,15 @@ export async function* streamChat(
         const eventType = json.type as string
         const normalizedEvent = (() => {
           switch (eventType) {
+            case 'session.bound':
+              return {
+                ...json,
+                payload: {
+                  airiSessionId: (json as any).payload?.airiSessionId ?? json.sessionId,
+                  lobsterSessionId: (json as any).payload?.lobsterSessionId ?? json.lobsterSessionId,
+                  sessionMode: (json as any).payload?.sessionMode ?? json.sessionMode ?? inferBridgeSessionMode((json as any).payload?.lobsterSessionId ?? json.lobsterSessionId),
+                },
+              }
             case 'state.changed':
               return {
                 ...json,
@@ -361,6 +448,10 @@ export async function* streamChat(
         })()
 
         // Dispatch side-effect events via callbacks
+        if (eventType === 'session.bound' && onSessionBound) {
+          onSessionBound((normalizedEvent as unknown as SessionBoundEvent).payload)
+          continue
+        }
         if (eventType === 'state.changed' && onStateChange) {
           onStateChange((normalizedEvent as unknown as StateChangedEvent).payload.state)
           continue
@@ -446,8 +537,8 @@ export async function respondPermission(
   const data = await response.json().catch(() => null)
   if (!response.ok) {
     throw new LobsterBridgeError(
-      String(data?.error || data?.message || `permission respond error (${response.status})`),
-      data?.code,
+      extractApiErrorMessage(data, `permission respond error (${response.status})`),
+      extractApiErrorCode(data),
       response.status,
     )
   }
@@ -471,8 +562,8 @@ export async function listPendingPermissions(
   const data = await response.json().catch(() => null)
   if (!response.ok) {
     throw new LobsterBridgeError(
-      String(data?.error || data?.message || `list permissions error (${response.status})`),
-      data?.code,
+      extractApiErrorMessage(data, `list permissions error (${response.status})`),
+      extractApiErrorCode(data),
       response.status,
     )
   }
@@ -496,8 +587,8 @@ export async function listSkills(
   const data = await response.json().catch(() => null)
   if (!response.ok) {
     throw new LobsterBridgeError(
-      String(data?.error || data?.message || `list skills error (${response.status})`),
-      data?.code,
+      extractApiErrorMessage(data, `list skills error (${response.status})`),
+      extractApiErrorCode(data),
       response.status,
     )
   }
@@ -525,8 +616,8 @@ export async function setSkillEnabled(
   const data = await response.json().catch(() => null)
   if (!response.ok) {
     throw new LobsterBridgeError(
-      String(data?.error || data?.message || `set skill enabled error (${response.status})`),
-      data?.code,
+      extractApiErrorMessage(data, `set skill enabled error (${response.status})`),
+      extractApiErrorCode(data),
       response.status,
     )
   }
@@ -553,8 +644,8 @@ export async function getSkillConfig(
   const data = await response.json().catch(() => null)
   if (!response.ok) {
     throw new LobsterBridgeError(
-      String(data?.error || data?.message || `get skill config error (${response.status})`),
-      data?.code,
+      extractApiErrorMessage(data, `get skill config error (${response.status})`),
+      extractApiErrorCode(data),
       response.status,
     )
   }
@@ -580,8 +671,8 @@ export async function setSkillConfig(
   const data = await response.json().catch(() => null)
   if (!response.ok) {
     throw new LobsterBridgeError(
-      String(data?.error || data?.message || `set skill config error (${response.status})`),
-      data?.code,
+      extractApiErrorMessage(data, `set skill config error (${response.status})`),
+      extractApiErrorCode(data),
       response.status,
     )
   }
@@ -606,8 +697,8 @@ export async function downloadSkill(
   const data = await response.json().catch(() => null) as SkillDownloadResponse | null
   if (!response.ok) {
     throw new LobsterBridgeError(
-      String(data ? JSON.stringify(data) : `download skill error (${response.status})`),
-      undefined,
+      extractApiErrorMessage(data, `download skill error (${response.status})`),
+      extractApiErrorCode(data),
       response.status,
     )
   }
@@ -634,8 +725,8 @@ export async function confirmSkillInstall(
   const data = await response.json().catch(() => null)
   if (!response.ok) {
     throw new LobsterBridgeError(
-      String(data?.error || data?.message || `confirm install error (${response.status})`),
-      data?.code,
+      extractApiErrorMessage(data, `confirm install error (${response.status})`),
+      extractApiErrorCode(data),
       response.status,
     )
   }
