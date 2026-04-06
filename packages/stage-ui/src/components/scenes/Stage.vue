@@ -626,7 +626,7 @@ watch(audioDeviceEnabled, (enabled) => {
 
 // Play special token: delay or emotion
 function playSpecialToken(special: string) {
-  if (special.includes('<|API')) {
+  if (special.includes('<|ACT')) {
     const emotion: EmotionPayload = {
       name: Emotion.Think,
       intensity: 1,

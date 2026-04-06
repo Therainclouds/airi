@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { useLlmmarkerParser } from './llm-marker-parser'
+import { stripLlmControlTokens, useLlmmarkerParser } from './llm-marker-parser'
 
 describe('useLlmmarkerParser', async () => {
   it('should parse pure literals', async () => {
@@ -285,5 +285,57 @@ describe('useLlmmarkerParser', async () => {
     await parser.end()
 
     expect(endText).toBe(fullText)
+  })
+
+  it('should parse ACT tokens without a closing marker', async () => {
+    const fullText = '<|ACT:{"emotion":{"name":"happy"}}你好呀'
+    const collectedLiterals: string[] = []
+    const collectedSpecials: string[] = []
+
+    const parser = useLlmmarkerParser({
+      onLiteral(literal) {
+        collectedLiterals.push(literal)
+      },
+      onSpecial(special) {
+        collectedSpecials.push(special)
+      },
+    })
+
+    for (const char of fullText) {
+      await parser.consume(char)
+    }
+
+    await parser.end()
+
+    expect(collectedSpecials).toEqual(['<|ACT:{"emotion":{"name":"happy"}}'])
+    expect(collectedLiterals.join('')).toBe('你好呀')
+  })
+
+  it('should parse angle ACT tokens', async () => {
+    const fullText = '<ACT:{"emotion":{"name":"happy"}}>你好呀'
+    const collectedLiterals: string[] = []
+    const collectedSpecials: string[] = []
+
+    const parser = useLlmmarkerParser({
+      onLiteral(literal) {
+        collectedLiterals.push(literal)
+      },
+      onSpecial(special) {
+        collectedSpecials.push(special)
+      },
+    })
+
+    for (const char of fullText) {
+      await parser.consume(char)
+    }
+
+    await parser.end()
+
+    expect(collectedSpecials).toEqual(['<ACT:{"emotion":{"name":"happy"}}>'])
+    expect(collectedLiterals.join('')).toBe('你好呀')
+  })
+
+  it('should strip ACT control tokens from visible text', () => {
+    expect(stripLlmControlTokens('<|ACT:{"emotion":{"name":"happy"}}>你好呀')).toBe('你好呀')
   })
 })

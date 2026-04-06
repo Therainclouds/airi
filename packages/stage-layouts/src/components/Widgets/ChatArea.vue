@@ -13,6 +13,7 @@ import {
 import { useAudioContext } from '@proj-airi/stage-ui/stores/audio'
 import { useChatOrchestratorStore } from '@proj-airi/stage-ui/stores/chat'
 import { useChatSessionStore } from '@proj-airi/stage-ui/stores/chat/session-store'
+import { useLobsterBridgeSessionStore } from '@proj-airi/stage-ui/stores/lobster-bridge-session'
 import { useConsciousnessStore } from '@proj-airi/stage-ui/stores/modules/consciousness'
 import { useHearingSpeechInputPipeline, useHearingStore } from '@proj-airi/stage-ui/stores/modules/hearing'
 import { useProvidersStore } from '@proj-airi/stage-ui/stores/providers'
@@ -37,16 +38,6 @@ type ChatAttachment
   = | { source: 'local', type: 'image' | 'file', data: string, mimeType: string, name: string }
     | { source: 'history', type: 'file', historyFileId: string, mimeType: string, name: string, size?: number }
 const attachments = ref<ChatAttachment[]>([])
-const selectedLobsterSkillIds = ref<string[]>([])
-const pendingLobsterPermissions = ref<Array<{
-  requestId: string
-  capabilityToken: string
-  toolName: string
-  toolInput: Record<string, unknown>
-  turnId?: string
-  createdAt?: number
-  expiresAt?: number
-}>>([])
 
 function handleFileChange(event: Event) {
   const target = event.target as HTMLInputElement
@@ -78,6 +69,7 @@ function removeAttachment(index: number) {
 }
 
 const providersStore = useProvidersStore()
+const lobsterBridgeSession = useLobsterBridgeSessionStore()
 const { activeProvider, activeModel } = storeToRefs(useConsciousnessStore())
 const { themeColorsHueDynamic } = storeToRefs(useSettings())
 
@@ -91,6 +83,11 @@ const { audioContext } = useAudioContext()
 const { t } = useI18n()
 const router = useRouter()
 const { skills: lobsterSkills, totalSkillsCount, enabledSkillsCount, refreshSkills: refreshLobsterSkills } = useLobsterSkills()
+const selectedLobsterSkillIds = computed({
+  get: () => lobsterBridgeSession.getSelectedSkillIds(activeSessionId.value),
+  set: value => lobsterBridgeSession.setSelectedSkillIds(activeSessionId.value, value),
+})
+const pendingLobsterPermissions = computed(() => lobsterBridgeSession.getPendingPermissions(activeSessionId.value))
 const sessionBridgeFiles = computed<ChatSessionBridgeFileRef[]>(() => {
   if (!activeSessionId.value) {
     return []
@@ -228,7 +225,7 @@ async function loadLobsterSkills() {
 
 function syncSelectedLobsterSkillIds() {
   const availableIds = new Set(lobsterSkills.value.map(skill => skill.id))
-  selectedLobsterSkillIds.value = selectedLobsterSkillIds.value.filter(id => availableIds.has(id))
+  lobsterBridgeSession.filterSelectedSkillIds(activeSessionId.value, availableIds)
 }
 
 function replacePendingLobsterPermissions(permissions: Array<{
@@ -240,7 +237,7 @@ function replacePendingLobsterPermissions(permissions: Array<{
   createdAt?: number
   expiresAt?: number
 }>) {
-  pendingLobsterPermissions.value = permissions.map(permission => ({
+  lobsterBridgeSession.replacePendingPermissions(activeSessionId.value, permissions.map(permission => ({
     requestId: String(permission.requestId || ''),
     capabilityToken: String(permission.capabilityToken || ''),
     toolName: String(permission.toolName || ''),
@@ -248,7 +245,7 @@ function replacePendingLobsterPermissions(permissions: Array<{
     turnId: typeof permission.turnId === 'string' ? permission.turnId : undefined,
     createdAt: typeof permission.createdAt === 'number' ? permission.createdAt : undefined,
     expiresAt: typeof permission.expiresAt === 'number' ? permission.expiresAt : undefined,
-  })).filter(permission => permission.requestId && permission.capabilityToken)
+  })).filter(permission => permission.requestId && permission.capabilityToken))
 }
 
 function upsertPendingLobsterPermission(payload: {
@@ -269,21 +266,16 @@ function upsertPendingLobsterPermission(payload: {
     createdAt: typeof payload.createdAt === 'number' ? payload.createdAt : undefined,
     expiresAt: typeof payload.expiresAt === 'number' ? payload.expiresAt : undefined,
   }
-  const index = pendingLobsterPermissions.value.findIndex(item => item.requestId === next.requestId)
-  if (index === -1) {
-    pendingLobsterPermissions.value = [...pendingLobsterPermissions.value, next]
-    return
-  }
-  pendingLobsterPermissions.value = pendingLobsterPermissions.value.map((item, itemIndex) => itemIndex === index ? next : item)
+  lobsterBridgeSession.upsertPendingPermission(activeSessionId.value, next)
 }
 
 function removePendingLobsterPermission(requestId: string) {
-  pendingLobsterPermissions.value = pendingLobsterPermissions.value.filter(permission => permission.requestId !== requestId)
+  lobsterBridgeSession.removePendingPermission(activeSessionId.value, requestId)
 }
 
 async function syncPendingLobsterPermissions() {
   if (activeProvider.value !== 'lobster-agent' || !activeSessionId.value) {
-    pendingLobsterPermissions.value = []
+    lobsterBridgeSession.replacePendingPermissions(activeSessionId.value, [])
     return
   }
   const { baseUrl, apiKey } = getLobsterConnection()
@@ -292,7 +284,7 @@ async function syncPendingLobsterPermissions() {
     replacePendingLobsterPermissions(permissions)
   }
   catch {
-    pendingLobsterPermissions.value = []
+    lobsterBridgeSession.replacePendingPermissions(activeSessionId.value, [])
   }
 }
 
@@ -464,7 +456,7 @@ watch([activeProvider, activeModel], async () => {
     })
   }
   else {
-    pendingLobsterPermissions.value = []
+    lobsterBridgeSession.replacePendingPermissions(activeSessionId.value, [])
   }
 }, { immediate: true })
 

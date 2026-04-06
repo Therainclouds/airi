@@ -2,6 +2,7 @@ const TAG_OPEN = '<|'
 const TAG_CLOSE = '|>'
 const ESCAPED_TAG_OPEN = '<{\'|\'}'
 const ESCAPED_TAG_CLOSE = '{\'|\'}>'
+const ACT_PREFIXES = ['<|ACT', '<ACT', '{ACT']
 
 interface MarkerToken {
   type: 'literal' | 'special'
@@ -54,6 +55,104 @@ function createPushStream<T>(): StreamController<T> {
   }
 }
 
+function findEarliestActPrefix(source: string, fromIndex = 0): number {
+  const indexes = ACT_PREFIXES
+    .map(prefix => source.indexOf(prefix, fromIndex))
+    .filter(index => index >= 0)
+
+  return indexes.length > 0 ? Math.min(...indexes) : -1
+}
+
+function findPendingActPrefix(source: string): number {
+  for (let index = 0; index < source.length; index++) {
+    const tail = source.slice(index)
+    if (
+      tail.length >= 2
+      && ACT_PREFIXES.some(prefix => tail.startsWith(prefix) || prefix.startsWith(tail))
+    ) {
+      return index
+    }
+  }
+
+  return -1
+}
+
+function tryExtractActToken(source: string, fromIndex = 0): { start: number, end: number, value: string } | null {
+  const start = findEarliestActPrefix(source, fromIndex)
+  if (start < 0)
+    return null
+
+  const jsonStart = source.indexOf('{', start + 1)
+  if (jsonStart < 0)
+    return null
+
+  let cursor = jsonStart
+  let depth = 0
+  let inString = false
+  let escaped = false
+
+  while (cursor < source.length) {
+    const char = source[cursor]
+    if (escaped) {
+      escaped = false
+    }
+    else if (char === '\\') {
+      escaped = true
+    }
+    else if (char === '"') {
+      inString = !inString
+    }
+    else if (!inString && char === '{') {
+      depth++
+    }
+    else if (!inString && char === '}') {
+      depth--
+      if (depth === 0) {
+        let end = cursor + 1
+        if (source.slice(end, end + TAG_CLOSE.length) === TAG_CLOSE) {
+          end += TAG_CLOSE.length
+        }
+        else if (source.startsWith('<|ACT', start) && source[end] === '>') {
+          end += 1
+        }
+        else if (source.startsWith('<ACT', start)) {
+          if (source[end] !== '>')
+            return null
+          end += 1
+        }
+        return {
+          start,
+          end,
+          value: source.slice(start, end),
+        }
+      }
+    }
+    cursor++
+  }
+
+  return null
+}
+
+export function stripLlmControlTokens(value: string): string {
+  let output = ''
+  let cursor = 0
+
+  while (cursor < value.length) {
+    const actToken = tryExtractActToken(value, cursor)
+    if (!actToken) {
+      output += value.slice(cursor)
+      break
+    }
+
+    output += value.slice(cursor, actToken.start)
+    cursor = actToken.end
+  }
+
+  return output
+    .replace(/<\|DELAY:\d+\|>/gi, '')
+    .trim()
+}
+
 async function readStream<T>(stream: ReadableStream<T>, handler: (value: T) => Promise<void> | void) {
   const reader = stream.getReader()
   try {
@@ -84,8 +183,32 @@ function createLlmMarkerParser(options?: MarkerParserOptions) {
 
       while (buffer.length > 0) {
         if (!inTag) {
+          const actToken = tryExtractActToken(buffer)
           const openTagIndex = buffer.indexOf(TAG_OPEN)
+          if (actToken && (openTagIndex < 0 || actToken.start <= openTagIndex)) {
+            if (actToken.start > 0) {
+              const emit = buffer.slice(0, actToken.start)
+              buffer = buffer.slice(actToken.start)
+              await onLiteral(emit)
+              continue
+            }
+
+            buffer = buffer.slice(actToken.end)
+            await onSpecial(actToken.value)
+            continue
+          }
+
           if (openTagIndex < 0) {
+            const pendingActIndex = findPendingActPrefix(buffer)
+            if (pendingActIndex >= 0) {
+              if (pendingActIndex > 0) {
+                const emit = buffer.slice(0, pendingActIndex)
+                buffer = buffer.slice(pendingActIndex)
+                await onLiteral(emit)
+              }
+              break
+            }
+
             if (buffer.length - tailLength >= minLiteralEmitLength) {
               const emit = buffer.slice(0, -tailLength)
               buffer = buffer.slice(-tailLength)
@@ -102,6 +225,16 @@ function createLlmMarkerParser(options?: MarkerParserOptions) {
           inTag = true
         }
         else {
+          if (buffer.startsWith('<|ACT')) {
+            const actToken = tryExtractActToken(buffer)
+            if (actToken && actToken.start === 0) {
+              buffer = buffer.slice(actToken.end)
+              await onSpecial(actToken.value)
+              inTag = false
+              continue
+            }
+          }
+
           const closeTagIndex = buffer.indexOf(TAG_CLOSE)
           if (closeTagIndex < 0)
             break

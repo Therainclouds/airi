@@ -13,7 +13,7 @@ import { defineStore, storeToRefs } from 'pinia'
 import { ref, toRaw } from 'vue'
 
 import { useAnalytics } from '../composables'
-import { useLlmmarkerParser } from '../composables/llm-marker-parser'
+import { stripLlmControlTokens, useLlmmarkerParser } from '../composables/llm-marker-parser'
 import { categorizeResponse, createStreamingCategorizer } from '../composables/response-categoriser'
 import { shouldAttemptBridge, shouldUseStandardLlmStream } from './chat-bridge-mode'
 import { createDatetimeContext } from './chat/context-providers'
@@ -371,10 +371,27 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
             return
 
           const finalCategorization = categorizeResponse(fullText, activeProvider.value)
+          const sanitizedSpeech = stripLlmControlTokens(finalCategorization.speech || '')
+          const sanitizedFullText = stripLlmControlTokens(fullText)
+          const fallbackSpeech = (sanitizedSpeech || sanitizedFullText).trim()
+          const hasVisibleContent = typeof buildingMessage.content === 'string'
+            ? Boolean(buildingMessage.content.trim())
+            : Array.isArray(buildingMessage.content) && buildingMessage.content.length > 0
+
+          if (!hasVisibleContent && fallbackSpeech) {
+            buildingMessage.content = fallbackSpeech
+          }
+
+          if (buildingMessage.slices.length === 0 && fallbackSpeech) {
+            buildingMessage.slices.push({
+              type: 'text',
+              text: fallbackSpeech,
+            })
+          }
 
           buildingMessage.categorization = {
-            speech: finalCategorization.speech,
-            reasoning: finalCategorization.reasoning,
+            speech: sanitizedSpeech,
+            reasoning: buildingMessage.categorization?.reasoning || finalCategorization.reasoning,
           }
           updateUI()
         },
@@ -465,9 +482,14 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
           const requestedReattachFileIds = options.bridgeOptions.reattachFileRefs?.map(file => file.id) ?? []
           try {
             // Bridge path: use Lobster Bridge AsyncIterable stream
-            const { streamChat } = await import('../services/lobster-bridge')
+            const { buildBridgePromptText, buildUserContent, extractBridgeSystemPrompt, streamChat } = await import('../services/lobster-bridge')
             const { baseUrl, apiKey, fileAttachments, reattachFileRefs, skillIds } = options.bridgeOptions
             const requestedSessionMode = resolveBridgeSessionMode(sessionId, { fileAttachments, reattachFileRefs, skillIds }, options.attachments?.length ?? 0)
+            const bridgePromptText = buildBridgePromptText(sendingMessage, contextsSnapshot, {
+              hasImages: Boolean(options.attachments?.length),
+            })
+            const bridgeUserContent = buildUserContent(bridgePromptText, options.attachments ?? [])
+            const bridgeSystemPrompt = extractBridgeSystemPrompt(newMessages as Array<{ role: string, content: unknown }>)
 
             let resolvedBridgeFiles: Array<{ id: string, name: string, mimeType: string, size?: number }> = []
             let uploadedBridgeFiles: Array<{ id: string, name: string, mimeType: string, size?: number }> = []
@@ -511,7 +533,8 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
               stream: true as const,
               fileIds: resolvedBridgeFiles.map(file => file.id),
               skillIds,
-              messages: [{ role: 'user' as const, content: sendingMessage }],
+              systemPrompt: bridgeSystemPrompt,
+              messages: [{ role: 'user' as const, content: bridgeUserContent }],
             } as any
 
             for await (const event of streamChat({
@@ -578,9 +601,23 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
                   break
                 }
                 case 'reasoning.delta': {
+                  const delta = (event as any).payload?.delta ?? ''
+                  if (!delta)
+                    break
+                  buildingMessage.categorization = {
+                    speech: buildingMessage.categorization?.speech ?? '',
+                    reasoning: `${buildingMessage.categorization?.reasoning ?? ''}${delta}`,
+                  }
+                  updateUI()
                   break
                 }
                 case 'reasoning.final': {
+                  const finalReasoning = (event as any).payload?.content ?? ''
+                  buildingMessage.categorization = {
+                    speech: buildingMessage.categorization?.speech ?? '',
+                    reasoning: finalReasoning || buildingMessage.categorization?.reasoning || '',
+                  }
+                  updateUI()
                   break
                 }
                 case 'tool.call': {

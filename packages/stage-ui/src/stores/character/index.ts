@@ -4,7 +4,7 @@ import { nanoid } from 'nanoid'
 import { defineStore, storeToRefs } from 'pinia'
 import { computed, reactive, ref } from 'vue'
 
-import { useLlmmarkerParser } from '../../composables/llm-marker-parser'
+import { stripLlmControlTokens, useLlmmarkerParser } from '../../composables/llm-marker-parser'
 import { useAiriCardStore } from '../modules'
 import { useSpeechRuntimeStore } from '../speech-runtime'
 
@@ -109,8 +109,9 @@ export const useCharacterStore = defineStore('character', () => {
     if (!state)
       return
 
-    state.reaction.message = fullText
-    recordSparkNotifyReaction(sparkEventId, fullText, { metadata: options?.metadata })
+    const visibleText = stripLlmControlTokens(fullText)
+    state.reaction.message = visibleText
+    recordSparkNotifyReaction(sparkEventId, visibleText, { metadata: options?.metadata })
 
     void state.parser.end().then(() => {
       state.intent.writeFlush()
