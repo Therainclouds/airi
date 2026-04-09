@@ -41,6 +41,8 @@ const providersStore = useProvidersStore()
 
 const { activeProvider: consciousnessProvider, activeModel: defaultConsciousnessModel } = storeToRefs(consciousnessStore)
 const { activeSpeechProvider: speechProvider, activeSpeechModel: defaultSpeechModel, activeSpeechVoiceId: defaultSpeechVoiceId } = storeToRefs(speechStore)
+const bridgeProviderIds = ['lobster-agent', 'openclaw-agent']
+const openClawPrompt = ref('')
 
 // Determine if we're in edit mode
 const isEditMode = computed(() => !!props.cardId)
@@ -103,6 +105,9 @@ const speechVoiceOptions = computed(() => {
     label: voice.name || voice.id,
   }))
 })
+
+const selectedChatProviderId = computed(() => selectedConsciousnessProvider.value || consciousnessProvider.value || '')
+const requiresOpenClawPrompt = computed(() => bridgeProviderIds.includes(selectedChatProviderId.value))
 
 // Load models for current providers on init
 watch(() => [consciousnessProvider.value, speechProvider.value], async ([consProvider, spProvider]) => {
@@ -236,7 +241,15 @@ function saveCard(card: Card): boolean {
     errorMessage.value = t('settings.pages.card.creation.errors.posthistoryinstructions')
     return false
   }
+  else if (requiresOpenClawPrompt.value && !openClawPrompt.value.trim()) {
+    showError.value = true
+    errorMessage.value = t('settings.pages.card.creation.errors.openclawprompt')
+    return false
+  }
   showError.value = false
+
+  const existingAiriExtension = rawCard.extensions?.airi as AiriExtension | undefined
+  const normalizedOpenClawPrompt = openClawPrompt.value.trim()
 
   // Build card with modules extension
   const cardWithModules = {
@@ -245,6 +258,7 @@ function saveCard(card: Card): boolean {
       ...rawCard.extensions,
       airi: {
         modules: {
+          ...existingAiriExtension?.modules,
           consciousness: {
             provider: selectedConsciousnessProvider.value || consciousnessProvider.value,
             model: selectedConsciousnessModel.value || defaultConsciousnessModel.value,
@@ -255,7 +269,13 @@ function saveCard(card: Card): boolean {
             voice_id: selectedSpeechVoiceId.value || defaultSpeechVoiceId.value,
           },
         },
-        agents: {},
+        agents: {
+          ...existingAiriExtension?.agents,
+          openclaw: {
+            ...existingAiriExtension?.agents?.openclaw,
+            prompt: normalizedOpenClawPrompt,
+          },
+        },
       } as AiriExtension,
     },
   }
@@ -280,6 +300,7 @@ function initializeCard(): Card {
   // Extract existing card data if in edit mode
   const existingCard = (isEditMode.value && props.cardId) ? cardStore.getCard(props.cardId) : undefined
   const airiExt = existingCard?.extensions?.airi as AiriExtension | undefined
+  openClawPrompt.value = airiExt?.agents?.openclaw?.prompt || ''
 
   // Initialize module selections with fallback logic (handles all cases: create, edit with/without extension)
   selectedConsciousnessProvider.value = airiExt?.modules?.consciousness?.provider || consciousnessProvider.value
@@ -509,9 +530,16 @@ function getDefaultPlaceholder(defaultValue: string | undefined): string {
           </div>
           <!-- Settings -->
           <div v-else-if="activeTab === 'settings'" class="tab-content ml-auto mr-auto w-95%">
+            <div class="mx-auto mb-4 w-90% border border-amber-200 rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800/60 dark:bg-amber-950/30 dark:text-amber-200">
+              {{ t('settings.pages.card.creation.openclawprompt_notice') }}
+            </div>
+            <div v-if="requiresOpenClawPrompt" class="mx-auto mb-4 w-90% border border-primary-200 rounded-xl bg-primary-50 px-4 py-3 text-sm text-primary-700 dark:border-primary-800/60 dark:bg-primary-950/30 dark:text-primary-200">
+              {{ t('settings.pages.card.creation.openclawprompt_required_notice') }}
+            </div>
             <div class="input-list ml-auto mr-auto w-90% flex flex-row flex-wrap justify-center gap-8">
               <FieldInput v-model="cardSystemPrompt" :label="t('settings.pages.card.systemprompt')" :single-line="false" :required="true" :description="t('settings.pages.card.creation.fields_info.systemprompt')" />
               <FieldInput v-model="cardPostHistoryInstructions" :label="t('settings.pages.card.posthistoryinstructions')" :single-line="false" :required="true" :description="t('settings.pages.card.creation.fields_info.posthistoryinstructions')" />
+              <FieldInput v-model="openClawPrompt" :label="t('settings.pages.card.openclawprompt')" :single-line="false" :required="requiresOpenClawPrompt" :description="t('settings.pages.card.creation.fields_info.openclawprompt')" />
               <FieldInput v-model="cardVersion" :label="t('settings.pages.card.creation.version')" :required="true" :description="t('settings.pages.card.creation.fields_info.version')" />
             </div>
           </div>

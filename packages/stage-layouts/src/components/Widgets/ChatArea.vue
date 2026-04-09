@@ -14,6 +14,7 @@ import { useAudioContext } from '@proj-airi/stage-ui/stores/audio'
 import { useChatOrchestratorStore } from '@proj-airi/stage-ui/stores/chat'
 import { useChatSessionStore } from '@proj-airi/stage-ui/stores/chat/session-store'
 import { useLobsterBridgeSessionStore } from '@proj-airi/stage-ui/stores/lobster-bridge-session'
+import { useAiriCardStore } from '@proj-airi/stage-ui/stores/modules/airi-card'
 import { useConsciousnessStore } from '@proj-airi/stage-ui/stores/modules/consciousness'
 import { useHearingSpeechInputPipeline, useHearingStore } from '@proj-airi/stage-ui/stores/modules/hearing'
 import { useProvidersStore } from '@proj-airi/stage-ui/stores/providers'
@@ -70,7 +71,9 @@ function removeAttachment(index: number) {
 
 const providersStore = useProvidersStore()
 const lobsterBridgeSession = useLobsterBridgeSessionStore()
+const airiCardStore = useAiriCardStore()
 const { activeProvider, activeModel } = storeToRefs(useConsciousnessStore())
+const { bridgeSystemPrompt } = storeToRefs(airiCardStore)
 const { themeColorsHueDynamic } = storeToRefs(useSettings())
 
 const { askPermission, startStream } = useSettingsAudioDevice()
@@ -82,12 +85,14 @@ const { messages, activeSessionId } = storeToRefs(chatSession)
 const { audioContext } = useAudioContext()
 const { t } = useI18n()
 const router = useRouter()
-const { skills: lobsterSkills, totalSkillsCount, enabledSkillsCount, refreshSkills: refreshLobsterSkills } = useLobsterSkills()
+const { skills: lobsterSkills, totalSkillsCount, enabledSkillsCount, refreshSkills: refreshLobsterSkills } = useLobsterSkills(activeProvider)
 const selectedLobsterSkillIds = computed({
   get: () => lobsterBridgeSession.getSelectedSkillIds(activeSessionId.value),
   set: value => lobsterBridgeSession.setSelectedSkillIds(activeSessionId.value, value),
 })
 const pendingLobsterPermissions = computed(() => lobsterBridgeSession.getPendingPermissions(activeSessionId.value))
+const bridgeProviderIds = ['lobster-agent', 'openclaw-agent']
+const isBridgeChatProvider = computed(() => bridgeProviderIds.includes(activeProvider.value))
 const sessionBridgeFiles = computed<ChatSessionBridgeFileRef[]>(() => {
   if (!activeSessionId.value) {
     return []
@@ -109,7 +114,7 @@ function shouldDiscoverActiveProviderToolsCompatibility() {
     return false
   }
 
-  if (activeProvider.value === 'lobster-agent') {
+  if (isBridgeChatProvider.value) {
     return getLobsterProviderConfig()?.useBridge === false
   }
 
@@ -178,10 +183,26 @@ function extractBridgeErrorCode(error: unknown) {
     : undefined
 }
 
+function getBridgePromptRequirementError() {
+  if (!isBridgeChatProvider.value) {
+    return undefined
+  }
+
+  if (getLobsterProviderConfig()?.useBridge === false) {
+    return undefined
+  }
+
+  if (bridgeSystemPrompt.value.trim()) {
+    return undefined
+  }
+
+  return t('settings.pages.card.openclawprompt_required_runtime')
+}
+
 async function sendMessageToSession(textToSend: string, sendingAttachments: ChatAttachment[], targetSessionId?: string) {
   const providerConfig = providersStore.getProviderConfig(activeProvider.value)
 
-  if (activeProvider.value === 'lobster-agent') {
+  if (isBridgeChatProvider.value) {
     const { baseUrl, apiKey } = getLobsterConnection()
     const fileAttachments = sendingAttachments.filter((item): item is Extract<ChatAttachment, { source: 'local', type: 'file' }> => item.source === 'local' && item.type === 'file')
     const reattachFileRefs = sendingAttachments
@@ -217,7 +238,7 @@ async function sendMessageToSession(textToSend: string, sendingAttachments: Chat
 }
 
 async function loadLobsterSkills() {
-  if (activeProvider.value !== 'lobster-agent')
+  if (!isBridgeChatProvider.value)
     return
   await refreshLobsterSkills()
   syncSelectedLobsterSkillIds()
@@ -274,7 +295,7 @@ function removePendingLobsterPermission(requestId: string) {
 }
 
 async function syncPendingLobsterPermissions() {
-  if (activeProvider.value !== 'lobster-agent' || !activeSessionId.value) {
+  if (!isBridgeChatProvider.value || !activeSessionId.value) {
     lobsterBridgeSession.replacePendingPermissions(activeSessionId.value, [])
     return
   }
@@ -370,18 +391,30 @@ async function debouncedAutoSend(text: string) {
     const textToSend = pendingAutoSendText.value.trim()
     if (textToSend && autoSendEnabled.value) {
       try {
-        const providerConfig = providersStore.getProviderConfig(activeProvider.value)
-        await ingest(textToSend, {
-          chatProvider: await providersStore.getProviderInstance(activeProvider.value) as ChatProvider,
-          model: activeModel.value,
-          providerConfig,
-        })
-        // Clear the message input after sending
+        const bridgePromptRequirementError = getBridgePromptRequirementError()
+        if (bridgePromptRequirementError) {
+          messages.value.push({
+            role: 'error',
+            content: bridgePromptRequirementError,
+          })
+          if (activeSessionId.value)
+            chatSession.persistSessionMessages(activeSessionId.value)
+          pendingAutoSendText.value = ''
+          autoSendTimeout = undefined
+          return
+        }
+
+        await sendMessageToSession(textToSend, [])
         messageInput.value = ''
         pendingAutoSendText.value = ''
       }
       catch (err) {
-        console.error('[ChatArea] Auto-send error:', err)
+        messages.value.push({
+          role: 'error',
+          content: resolveChatErrorMessage(err),
+        })
+        if (activeSessionId.value)
+          chatSession.persistSessionMessages(activeSessionId.value)
       }
     }
     autoSendTimeout = undefined
@@ -392,6 +425,17 @@ async function handleSend() {
   if (!messageInput.value.trim() || isComposing.value) {
     if (attachments.value.length === 0)
       return
+  }
+
+  const bridgePromptRequirementError = getBridgePromptRequirementError()
+  if (bridgePromptRequirementError) {
+    messages.value.push({
+      role: 'error',
+      content: bridgePromptRequirementError,
+    })
+    if (activeSessionId.value)
+      chatSession.persistSessionMessages(activeSessionId.value)
+    return
   }
 
   const textToSend = messageInput.value
@@ -408,7 +452,7 @@ async function handleSend() {
   }
   catch (error) {
     const hasBridgeFiles = sendingAttachments.some(attachment => attachment.type === 'file')
-    if (extractBridgeErrorCode(error) === 'bridge_mode_locked' && activeProvider.value === 'lobster-agent' && originalSessionId && hasBridgeFiles) {
+    if (extractBridgeErrorCode(error) === 'bridge_mode_locked' && isBridgeChatProvider.value && originalSessionId && hasBridgeFiles) {
       chatSession.setSessionMessages(originalSessionId, originalSessionMessages)
       try {
         const forkSessionId = await chatSession.forkSession({
@@ -447,7 +491,7 @@ watch([activeProvider, activeModel], async () => {
   if (shouldDiscoverActiveProviderToolsCompatibility()) {
     await discoverToolsCompatibility(activeModel.value, await providersStore.getProviderInstance<ChatProvider>(activeProvider.value), [])
   }
-  if (activeProvider.value === 'lobster-agent') {
+  if (isBridgeChatProvider.value) {
     await loadLobsterSkills().catch((error) => {
       console.warn('[ChatArea] Failed to load lobster skills:', error)
     })
@@ -461,7 +505,7 @@ watch([activeProvider, activeModel], async () => {
 }, { immediate: true })
 
 watch(activeSessionId, async () => {
-  if (activeProvider.value !== 'lobster-agent')
+  if (!isBridgeChatProvider.value)
     return
   await syncPendingLobsterPermissions().catch((error) => {
     console.warn('[ChatArea] Failed to refresh lobster permissions for session:', error)
@@ -771,7 +815,7 @@ watch(autoSendEnabled, (enabled) => {
         </div>
       </div>
 
-      <div v-if="activeProvider === 'lobster-agent' && sessionBridgeFiles.length > 0" class="flex flex-wrap gap-2 px-4 pb-2">
+      <div v-if="isBridgeChatProvider && sessionBridgeFiles.length > 0" class="flex flex-wrap gap-2 px-4 pb-2">
         <button
           v-for="file in sessionBridgeFiles"
           :key="file.id"
@@ -800,14 +844,14 @@ watch(autoSendEnabled, (enabled) => {
       />
 
       <LobsterSkillsBar
-        :visible="activeProvider === 'lobster-agent'"
+        :visible="isBridgeChatProvider"
         :total-skills-count="totalSkillsCount"
         :enabled-skills-count="enabledSkillsCount"
         @open-settings="openLobsterSkillsSettings"
       />
 
       <LobsterPermissionList
-        :visible="activeProvider === 'lobster-agent' && pendingLobsterPermissions.length > 0"
+        :visible="isBridgeChatProvider && pendingLobsterPermissions.length > 0"
         :permissions="pendingLobsterPermissions"
         @decide="handleLobsterPermissionDecision"
       />

@@ -3,6 +3,7 @@ const TAG_CLOSE = '|>'
 const ESCAPED_TAG_OPEN = '<{\'|\'}'
 const ESCAPED_TAG_CLOSE = '{\'|\'}>'
 const ACT_PREFIXES = ['<|ACT', '<ACT', '{ACT']
+const LEADING_ACT_META_FRAGMENT_RE = /^\s*(?:[:,|}>-]+\s*)?(?:"(?:cognitive|intent|motion|emotion|intensity|name|force|holdMs)"\s*:\s*(?:"[^"]*"|\{[^{}]*\}|-?\d+(?:\.\d+)?|true|false|null)\s*,?\s*)+(?:>\s*)?/i
 
 interface MarkerToken {
   type: 'literal' | 'special'
@@ -133,23 +134,33 @@ function tryExtractActToken(source: string, fromIndex = 0): { start: number, end
   return null
 }
 
+function normalizeControlTokenEscapes(value: string): string {
+  return value
+    .replaceAll(ESCAPED_TAG_OPEN, TAG_OPEN)
+    .replaceAll(ESCAPED_TAG_CLOSE, TAG_CLOSE)
+}
+
 export function stripLlmControlTokens(value: string): string {
+  const normalizedValue = normalizeControlTokenEscapes(value)
   let output = ''
   let cursor = 0
 
-  while (cursor < value.length) {
-    const actToken = tryExtractActToken(value, cursor)
+  while (cursor < normalizedValue.length) {
+    const actToken = tryExtractActToken(normalizedValue, cursor)
     if (!actToken) {
-      output += value.slice(cursor)
+      output += normalizedValue.slice(cursor)
       break
     }
 
-    output += value.slice(cursor, actToken.start)
+    output += normalizedValue.slice(cursor, actToken.start)
     cursor = actToken.end
   }
 
   return output
     .replace(/<\|DELAY:\d+\|>/gi, '')
+    .replace(/<DELAY:\d+>/gi, '')
+    .replace(/\{DELAY:\d+\}/gi, '')
+    .replace(LEADING_ACT_META_FRAGMENT_RE, '')
     .trim()
 }
 
@@ -177,9 +188,7 @@ function createLlmMarkerParser(options?: MarkerParserOptions) {
   return {
     async consume(textPart: string, onLiteral: (value: string) => Promise<void> | void, onSpecial: (value: string) => Promise<void> | void) {
       buffer += textPart
-      buffer = buffer
-        .replaceAll(ESCAPED_TAG_OPEN, TAG_OPEN)
-        .replaceAll(ESCAPED_TAG_CLOSE, TAG_CLOSE)
+      buffer = normalizeControlTokenEscapes(buffer)
 
       while (buffer.length > 0) {
         if (!inTag) {

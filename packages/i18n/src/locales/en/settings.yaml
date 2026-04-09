@@ -127,6 +127,8 @@ pages:
         scenario: You recently woke up and forgot everything about your previous life.
         systemprompt: You will receive messages, answer to them like a real human.
         posthistoryinstructions: Remember to imitate an human.
+      openclawprompt_notice: Maintain a dedicated prompt here for LobsterAI or OpenClaw Bridge sessions so AIRI native prompts no longer need to be forwarded.
+      openclawprompt_required_notice: The currently selected chat provider uses the Bridge flow, so an OpenClaw prompt is required before saving.
       modules_info: Configure modules for this character card. If not set, default module configuration will be used.
       use_default: Use default
       use_default_not_configured: Use default (not configured)
@@ -147,6 +149,7 @@ pages:
         greetings: How your character should say "hello" ?
         systemprompt: Explain here to the AI LLM how it should answer when prompted.
         posthistoryinstructions: Place here anything the AI LLM should read after the messages history.
+        openclawprompt: Dedicated prompt for LobsterAI / OpenClaw Bridge. When using openclaw-agent or lobster-agent, maintain this field instead of forwarding AIRI native system prompts.
         version: >-
           Card version, you should increase this if you are making changes from
           a previous card.
@@ -160,6 +163,7 @@ pages:
         scenario: 'Error: A scenario is required.'
         systemprompt: 'Error: Please, provide a system prompt.'
         posthistoryinstructions: 'Error: Post history prompt is required.'
+        openclawprompt: 'Error: The current Bridge provider requires an OpenClaw prompt.'
     modules: Modules
 
     name_asc: Name (A-Z)
@@ -168,6 +172,8 @@ pages:
     no_results: No matching cards found
     personality: Personality
     posthistoryinstructions: Post-History Instructions
+    openclawprompt: OpenClaw Prompt
+    openclawprompt_required_runtime: This character card does not have an OpenClaw prompt yet. Please configure it in card settings before sending messages through LobsterAI / OpenClaw Bridge.
     recent: Recently Added
     scenario: Scenario
     search: Search cards...
@@ -721,6 +727,9 @@ pages:
       openai-compatible:
         description: OpenAI Compatible
         title: OpenAI Compatible
+      openclaw-agent:
+        description: OpenClaw local bridge endpoint
+        title: OpenClaw Agent
       lobster-agent:
         description: LobsterAI local agent bridge
         title: Lobster Agent

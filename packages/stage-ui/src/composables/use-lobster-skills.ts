@@ -1,6 +1,8 @@
+import type { ComputedRef, Ref } from 'vue'
+
 import type { LobsterSkill as LobsterSkillType } from '../types/lobster-bridge'
 
-import { computed, ref } from 'vue'
+import { computed, ref, unref } from 'vue'
 
 import {
   confirmSkillInstall,
@@ -24,11 +26,22 @@ export interface LobsterSkill {
 
 const lobsterSkills = ref<LobsterSkill[]>([])
 const lobsterSkillsLoading = ref(false)
+const BRIDGE_PROVIDER_IDS = ['openclaw-agent', 'lobster-agent'] as const
 
-export function useLobsterSkills() {
+export function useLobsterSkills(providerId?: string | Ref<string | undefined> | ComputedRef<string | undefined>) {
   const providersStore = useProvidersStore()
 
-  const providerConfig = computed(() => (providersStore.getProviderConfig('lobster-agent') as Record<string, any>) ?? {})
+  const bridgeProviderId = computed(() => {
+    const preferredProviderId = unref(providerId)
+    if (preferredProviderId && BRIDGE_PROVIDER_IDS.includes(preferredProviderId as typeof BRIDGE_PROVIDER_IDS[number])) {
+      return preferredProviderId
+    }
+    if (providersStore.configuredProviders['openclaw-agent']) {
+      return 'openclaw-agent'
+    }
+    return 'lobster-agent'
+  })
+  const providerConfig = computed(() => (providersStore.getProviderConfig(bridgeProviderId.value) as Record<string, any>) ?? {})
   const baseUrl = computed(() => normalizeBaseUrl(providerConfig.value?.baseUrl))
   const apiKey = computed(() => normalizeApiKey(providerConfig.value?.apiKey))
   const totalSkillsCount = computed(() => lobsterSkills.value.length)
@@ -98,6 +111,7 @@ export function useLobsterSkills() {
     loading: lobsterSkillsLoading,
     totalSkillsCount,
     enabledSkillsCount,
+    bridgeProviderId,
     baseUrl,
     apiKey,
     providerConfig,

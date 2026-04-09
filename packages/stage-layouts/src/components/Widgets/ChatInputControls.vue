@@ -161,7 +161,7 @@ function handleFileClick() {
     </TooltipProvider>
 
     <div class="ml-auto text-xs opacity-60">
-      {{ activeProvider === 'lobster-agent' ? `已启用 ${enabledSkillsCount} / 总技能 ${totalSkillsCount}` : '' }}
+      {{ ['lobster-agent', 'openclaw-agent'].includes(activeProvider) ? `已启用 ${enabledSkillsCount} / 总技能 ${totalSkillsCount}` : '' }}
     </div>
 
     <button

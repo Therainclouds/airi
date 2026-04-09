@@ -63,7 +63,7 @@ function shouldDiscoverActiveProviderToolsCompatibility() {
     return false
   }
 
-  if (activeProvider.value === 'lobster-agent') {
+  if (['lobster-agent', 'openclaw-agent'].includes(activeProvider.value)) {
     return (providersStore.getProviderConfig(activeProvider.value) as Record<string, any>)?.useBridge === false
   }
 

@@ -22,6 +22,7 @@ import { createChatHooks } from './chat/hooks'
 import { useChatSessionStore } from './chat/session-store'
 import { useChatStreamStore } from './chat/stream-store'
 import { useLLM } from './llm'
+import { useAiriCardStore } from './modules/airi-card'
 import { useConsciousnessStore } from './modules/consciousness'
 
 interface LobsterBridgeOptions {
@@ -64,7 +65,9 @@ interface QueuedSend {
 
 export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
   const llmStore = useLLM()
+  const airiCardStore = useAiriCardStore()
   const consciousnessStore = useConsciousnessStore()
+  const { bridgeSystemPrompt } = storeToRefs(airiCardStore)
   const { activeProvider } = storeToRefs(consciousnessStore)
   const { trackFirstMessage } = useAnalytics()
 
@@ -283,6 +286,33 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
       }
     }
 
+    const applyFinalVisibleText = (visibleText: string) => {
+      buildingMessage.content = visibleText
+
+      let appliedTextSlice = false
+      const nextSlices = buildingMessage.slices.filter((slice) => {
+        if (slice.type !== 'text')
+          return true
+
+        if (!appliedTextSlice && visibleText) {
+          slice.text = visibleText
+          appliedTextSlice = true
+          return true
+        }
+
+        return false
+      })
+
+      if (!appliedTextSlice && visibleText) {
+        nextSlices.unshift({
+          type: 'text',
+          text: visibleText,
+        })
+      }
+
+      buildingMessage.slices = nextSlices
+    }
+
     updateUI()
     trackFirstMessage()
 
@@ -378,15 +408,11 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
             ? Boolean(buildingMessage.content.trim())
             : Array.isArray(buildingMessage.content) && buildingMessage.content.length > 0
 
-          if (!hasVisibleContent && fallbackSpeech) {
-            buildingMessage.content = fallbackSpeech
+          if (fallbackSpeech) {
+            applyFinalVisibleText(fallbackSpeech)
           }
-
-          if (buildingMessage.slices.length === 0 && fallbackSpeech) {
-            buildingMessage.slices.push({
-              type: 'text',
-              text: fallbackSpeech,
-            })
+          else if (!hasVisibleContent && buildingMessage.slices.length === 0) {
+            buildingMessage.content = ''
           }
 
           buildingMessage.categorization = {
@@ -482,14 +508,13 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
           const requestedReattachFileIds = options.bridgeOptions.reattachFileRefs?.map(file => file.id) ?? []
           try {
             // Bridge path: use Lobster Bridge AsyncIterable stream
-            const { buildBridgePromptText, buildUserContent, extractBridgeSystemPrompt, streamChat } = await import('../services/lobster-bridge')
+            const { buildBridgePromptText, buildUserContent, streamChat } = await import('../services/lobster-bridge')
             const { baseUrl, apiKey, fileAttachments, reattachFileRefs, skillIds } = options.bridgeOptions
             const requestedSessionMode = resolveBridgeSessionMode(sessionId, { fileAttachments, reattachFileRefs, skillIds }, options.attachments?.length ?? 0)
             const bridgePromptText = buildBridgePromptText(sendingMessage, contextsSnapshot, {
               hasImages: Boolean(options.attachments?.length),
             })
             const bridgeUserContent = buildUserContent(bridgePromptText, options.attachments ?? [])
-            const bridgeSystemPrompt = extractBridgeSystemPrompt(newMessages as Array<{ role: string, content: unknown }>)
 
             let resolvedBridgeFiles: Array<{ id: string, name: string, mimeType: string, size?: number }> = []
             let uploadedBridgeFiles: Array<{ id: string, name: string, mimeType: string, size?: number }> = []
@@ -533,7 +558,7 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
               stream: true as const,
               fileIds: resolvedBridgeFiles.map(file => file.id),
               skillIds,
-              systemPrompt: bridgeSystemPrompt,
+              systemPrompt: bridgeSystemPrompt.value || undefined,
               messages: [{ role: 'user' as const, content: bridgeUserContent }],
             } as any
 

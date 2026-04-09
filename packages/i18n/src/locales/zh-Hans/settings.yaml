@@ -124,6 +124,8 @@ pages:
         scenario: 你最近醒来，忘记了之前的所有生活。
         systemprompt: 你将收到消息，请像真实人类一样回复。
         posthistoryinstructions: 记得模仿人类的行为。
+      openclawprompt_notice: 使用 LobsterAI 或 OpenClaw Bridge 时，请在这里维护专用提示词。这样可以避免继续转发 Airi 原生提示词。
+      openclawprompt_required_notice: 当前聊天提供商会走 Bridge 链路，保存前必须填写 OpenClaw 提示词。
       modules_info: 为此角色卡配置模块。如未设置，将使用默认模块配置。
       use_default: 使用默认
       use_default_not_configured: 使用默认（未配置）
@@ -141,6 +143,7 @@ pages:
         greetings: 您的角色应该如何说“你好”？
         systemprompt: 在这里向 AI LLM 解释当被提示时应该如何回应。
         posthistoryinstructions: 在消息历史之后，放入 AI LLM 应该阅读的内容。
+        openclawprompt: 供 LobsterAI / OpenClaw Bridge 使用的专用提示词。使用 openclaw-agent 或 lobster-agent 时，应优先维护这里，而不是继续转发 Airi 的原生系统提示词。
         version: >-
           卡片版本，如果您从之前的卡片做了更改，应当增加此版本号。
         consciousness_model: 为这个角色选择 AI 模型。
@@ -153,6 +156,7 @@ pages:
         scenario: '错误：必须提供一个情境。'
         systemprompt: '错误：请提供系统提示。'
         posthistoryinstructions: '错误：必须提供消息历史后的提示。'
+        openclawprompt: '错误：当前 Bridge 提供商要求配置 OpenClaw 提示词。'
     modules: 模块
     name_asc: 名称 (A-Z)
     name_desc: 名称 (Z-A)
@@ -160,6 +164,8 @@ pages:
     no_results: 没有找到匹配的角色卡
     personality: 性格
     posthistoryinstructions: 历史提示指令
+    openclawprompt: OpenClaw 提示词
+    openclawprompt_required_runtime: 当前角色卡未配置 OpenClaw 提示词。请先到角色卡设置中填写后，再使用 LobsterAI / OpenClaw Bridge 发送消息。
     recent: 最近添加
     scenario: 场景
     search: 搜索角色卡...
@@ -694,6 +700,9 @@ pages:
       openai-compatible:
         description: OpenAI 兼容 API
         title: OpenAI 兼容 API
+      openclaw-agent:
+        description: OpenClaw 本地桥接入口
+        title: OpenClaw Agent
       lobster-agent:
         description: LobsterAI 本地 Agent 桥接
         title: Lobster Agent

@@ -1736,8 +1736,10 @@ export const useProvidersStore = defineStore('providers', () => {
 
   // Initialize all providers
   Object.keys(providerMetadata).forEach(initializeProvider)
-  if (!addedProviders.value['lobster-agent']) {
-    addedProviders.value['lobster-agent'] = true
+  for (const providerId of ['lobster-agent', 'openclaw-agent']) {
+    if (!addedProviders.value[providerId]) {
+      addedProviders.value[providerId] = true
+    }
   }
 
   function clearProviderValidationRetry(providerId: string, resetAttempts = false) {
@@ -1759,7 +1761,7 @@ export const useProvidersStore = defineStore('providers', () => {
     if (!config)
       return false
 
-    return providerId === 'lobster-agent' || Boolean(addedProviders.value[providerId])
+    return ['lobster-agent', 'openclaw-agent'].includes(providerId) || Boolean(addedProviders.value[providerId])
   }
 
   function scheduleProviderValidationRetry(providerId: string) {

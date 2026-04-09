@@ -338,4 +338,12 @@ describe('useLlmmarkerParser', async () => {
   it('should strip ACT control tokens from visible text', () => {
     expect(stripLlmControlTokens('<|ACT:{"emotion":{"name":"happy"}}>你好呀')).toBe('你好呀')
   })
+
+  it('should strip escaped ACT and DELAY control tokens from visible text', () => {
+    expect(stripLlmControlTokens('<{\'|\'}ACT:{"emotion":{"name":"happy"}}{\'|\'}><{\'|\'}DELAY:1{\'|\'}>你好呀')).toBe('你好呀')
+  })
+
+  it('should strip leaked ACT meta fragments from visible text', () => {
+    expect(stripLlmControlTokens(':"cognitive":"excited","intent":"greet","motion":"sit_up">早上好呀')).toBe('早上好呀')
+  })
 })
