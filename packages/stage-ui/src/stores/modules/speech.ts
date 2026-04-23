@@ -7,9 +7,11 @@ import { refManualReset } from '@vueuse/core'
 import { generateSpeech } from '@xsai/generate-speech'
 import { defineStore, storeToRefs } from 'pinia'
 import { computed, onMounted, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { toXml } from 'xast-util-to-xml'
 import { x } from 'xastscript'
 
+import { setupOfficialSpeechAutoPick } from '../../libs/providers/providers/official'
 import { useProvidersStore } from '../providers'
 
 export function toSignedPercent(value: number): string {
@@ -22,10 +24,15 @@ export function toSignedPercent(value: number): string {
 
 export const useSpeechStore = defineStore('speech', () => {
   const providersStore = useProvidersStore()
+<<<<<<< HEAD
   const { allAudioSpeechProvidersMetadata, configuredSpeechProvidersMetadata } = storeToRefs(providersStore)
+=======
+  const { allAudioSpeechProvidersMetadata } = storeToRefs(providersStore)
+  const { locale } = useI18n()
+>>>>>>> origin/main
 
   // State
-  const activeSpeechProvider = useLocalStorageManualReset<string>('settings/speech/active-provider', '')
+  const activeSpeechProvider = useLocalStorageManualReset<string>('settings/speech/active-provider', 'speech-noop')
   const activeSpeechModel = useLocalStorageManualReset<string>('settings/speech/active-model', '')
   const activeSpeechVoiceId = useLocalStorageManualReset<string>('settings/speech/voice', '')
   const activeSpeechVoice = refManualReset<VoiceInfo | undefined>(undefined)
@@ -79,7 +86,7 @@ export const useSpeechStore = defineStore('speech', () => {
     if (activeSpeechProvider.value === 'alibaba-cloud-model-studio' && activeSpeechModel.value === 'cosyvoice-v2') {
       return true
     }
-    return ['elevenlabs', 'microsoft-speech', 'azure-speech', 'google', 'volcengine'].includes(activeSpeechProvider.value)
+    return ['elevenlabs', 'microsoft-speech', 'azure-speech'].includes(activeSpeechProvider.value)
   })
 
   function ensureDefaultModel(provider: string) {
@@ -150,6 +157,38 @@ export const useSpeechStore = defineStore('speech', () => {
     immediate: true,
   })
 
+  if (!activeSpeechProvider.value) {
+    activeSpeechProvider.value = 'speech-noop'
+  }
+
+  watch(
+    () => providersStore.configuredSpeechProvidersMetadata.map(provider => provider.id),
+    (configuredProviderIds) => {
+      if (!activeSpeechProvider.value || activeSpeechProvider.value === 'speech-noop')
+        return
+
+      // NOTICE: only reset when the provider has actually been validated and found unconfigured.
+      // Skip reset if validation hasn't run yet (validatedCredentialHash is undefined)
+      // to avoid a race condition where immediate watcher fires before async validation completes.
+      const runtimeState = providersStore.providerRuntimeState[activeSpeechProvider.value]
+      if (runtimeState && runtimeState.validatedCredentialHash === undefined)
+        return
+
+      // NOTICE: clear stale selection when the currently selected speech provider
+      // is no longer configured to avoid implicit fallback behavior from persisted state.
+      // NOTE: Do NOT use { immediate: true } here — providers.ts validates credentials
+      // asynchronously on startup, so firing immediately would see an empty
+      // configuredSpeechProvidersMetadata and incorrectly reset activeSpeechProvider
+      // to 'speech-noop', permanently wiping the persisted selection from localStorage.
+      if (!configuredProviderIds.includes(activeSpeechProvider.value)) {
+        activeSpeechProvider.value = 'speech-noop'
+        activeSpeechModel.value = ''
+        activeSpeechVoiceId.value = ''
+        activeSpeechVoice.value = undefined
+      }
+    },
+  )
+
   onMounted(() => {
     if (!activeSpeechProvider.value && configuredSpeechProvidersMetadata.value.length > 0) {
       activeSpeechProvider.value = configuredSpeechProvidersMetadata.value[0].id
@@ -162,6 +201,14 @@ export const useSpeechStore = defineStore('speech', () => {
         activeSpeechVoice.value = availableVoices.value[activeSpeechProvider.value]?.find(voice => voice.id === activeSpeechVoiceId.value)
       }
     })
+  })
+
+  setupOfficialSpeechAutoPick({
+    activeSpeechProvider,
+    activeSpeechVoiceId,
+    availableVoices,
+    selectedLanguage,
+    uiLocale: locale,
   })
 
   watch([activeSpeechVoiceId, availableVoices], ([voiceId, voices]) => {
@@ -264,6 +311,9 @@ export const useSpeechStore = defineStore('speech', () => {
   }
 
   const configured = computed(() => {
+    if (activeSpeechProvider.value === 'speech-noop')
+      return false
+
     if (!activeSpeechProvider.value)
       return false
 

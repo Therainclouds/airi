@@ -1,21 +1,32 @@
+import type { FileLoggerHandle } from './app/file-logger'
+
+import process, { env, platform } from 'node:process'
+
 import { dirname } from 'node:path'
-import { env, platform } from 'node:process'
 import { fileURLToPath } from 'node:url'
 
+import messages from '@proj-airi/i18n/locales'
+
 import { electronApp, optimizer } from '@electron-toolkit/utils'
-import { Format, LogLevel, setGlobalFormat, setGlobalLogLevel, useLogg } from '@guiiai/logg'
+import { Format, LogLevel, setGlobalFormat, setGlobalHookPostLog, setGlobalLogLevel, useLogg } from '@guiiai/logg'
 import { initScreenCaptureForMain } from '@proj-airi/electron-screen-capture/main'
 import { app, ipcMain } from 'electron'
 import { noop } from 'es-toolkit'
-import { createLoggLogger, injeca } from 'injeca'
+import { createLoggLogger, injeca, lifecycle } from 'injeca'
 import { isLinux } from 'std-env'
 
 import icon from '../../resources/icon.png?asset'
 
 import { openDebugger, setupDebugger } from './app/debugger'
+import { nullFileLoggerHandle, setupFileLogger } from './app/file-logger'
+import { createGlobalAppConfig } from './configs/global'
 import { emitAppBeforeQuit, emitAppReady, emitAppWindowAllClosed } from './libs/bootkit/lifecycle'
 import { setElectronMainDirname } from './libs/electron/location'
+import { createI18n } from './libs/i18n'
+import { createWindowAuthManagerService } from './services/airi/auth'
 import { setupServerChannel } from './services/airi/channel-server'
+import { setupBuiltInServer } from './services/airi/http-server'
+import { setupMcpStdioManager } from './services/airi/mcp-servers'
 import { setupPluginHost } from './services/airi/plugins'
 import { setupAutoUpdater } from './services/electron/auto-updater'
 import { setupTray } from './tray'
@@ -26,6 +37,7 @@ import { setupChatWindowReusableFunc } from './windows/chat'
 import { setupDevtoolsWindow } from './windows/devtools'
 import { setupMainWindow } from './windows/main'
 import { setupNoticeWindowManager } from './windows/notice'
+import { setupOnboardingWindowManager } from './windows/onboarding'
 import { setupSettingsWindowReusableFunc } from './windows/settings'
 import { setupWidgetsWindowManager } from './windows/widgets'
 
@@ -72,65 +84,115 @@ electronApp.setAppUserModelId('ai.moeru.airi')
 
 initScreenCaptureForMain()
 
+let fileLogger: FileLoggerHandle = nullFileLoggerHandle
+let skipFileLogging = false
+
 app.whenReady().then(async () => {
+  // Initialize file logger and register the hook
+  fileLogger = await setupFileLogger()
+
+  // Register the global hook for file logging
+  setGlobalHookPostLog((_, formatted) => {
+    if (skipFileLogging || fileLogger.logFileFd === null)
+      return
+    void fileLogger.appendLog(formatted)
+  })
+
   injeca.setLogger(createLoggLogger(useLogg('injeca').useGlobalConfig()))
 
+  const appConfig = injeca.provide('configs:app', () => createGlobalAppConfig())
   const electronApp = injeca.provide('host:electron:app', () => app)
-  const autoUpdater = injeca.provide('services:auto-updater', () => setupAutoUpdater())
+  const autoUpdater = injeca.provide('services:auto-updater', {
+    dependsOn: { appConfig },
+    build: ({ dependsOn }) => setupAutoUpdater({
+      getStoredUpdateLane: () => dependsOn.appConfig.get()?.updateChannel,
+      setStoredUpdateLane: (lane) => {
+        const currentConfig = dependsOn.appConfig.get()
+        dependsOn.appConfig.update({
+          language: currentConfig?.language ?? 'en',
+          updateChannel: lane,
+        })
+      },
+    }),
+  })
+
+  const i18n = injeca.provide('libs:i18n', {
+    dependsOn: { appConfig },
+    build: ({ dependsOn }) => createI18n({ messages, locale: dependsOn.appConfig.get()?.language }),
+  })
 
   const serverChannel = injeca.provide('modules:channel-server', {
-    dependsOn: { app: electronApp },
-    build: async () => setupServerChannel(),
+    dependsOn: { app: electronApp, lifecycle },
+    build: async ({ dependsOn }) => setupServerChannel(dependsOn),
   })
 
-  const pluginHost = injeca.provide('modules:plugin-host', {
-    dependsOn: { serverChannel },
-    build: () => setupPluginHost(),
+  const airiHttpServer = injeca.provide('modules:airi-http-server', {
+    build: async () => setupBuiltInServer({ servers: [] }),
   })
+
+  const mcpStdioManager = injeca.provide('modules:mcp-stdio-manager', {
+    build: async () => setupMcpStdioManager(),
+  })
+
+  const windowAuthManager = injeca.provide('services:window-auth-manager', () => createWindowAuthManagerService())
 
   // BeatSync will create a background window to capture and process audio.
   const beatSync = injeca.provide('windows:beat-sync', () => setupBeatSync())
 
-  const devtoolsMarkdownStressWindow = injeca.provide('windows:devtools:markdown-stress', () => setupDevtoolsWindow())
-  const noticeWindow = injeca.provide('windows:notice', () => setupNoticeWindowManager())
+  const devtoolsWindow = injeca.provide('windows:devtools', () => setupDevtoolsWindow())
+
+  const onboardingWindowManager = injeca.provide('windows:onboarding', {
+    dependsOn: { serverChannel, i18n, windowAuthManager },
+    build: ({ dependsOn }) => setupOnboardingWindowManager(dependsOn),
+  })
+
+  const noticeWindow = injeca.provide('windows:notice', {
+    dependsOn: { i18n, serverChannel },
+    build: ({ dependsOn }) => setupNoticeWindowManager(dependsOn),
+  })
 
   const widgetsManager = injeca.provide('windows:widgets', {
-    dependsOn: { serverChannel },
-    build: () => setupWidgetsWindowManager(),
+    dependsOn: { serverChannel, i18n },
+    build: ({ dependsOn }) => setupWidgetsWindowManager(dependsOn),
+  })
+
+  const pluginHost = injeca.provide('modules:plugin-host', {
+    dependsOn: { serverChannel, widgetsManager },
+    build: ({ dependsOn }) => setupPluginHost({ widgetsManager: dependsOn.widgetsManager }),
   })
 
   const aboutWindow = injeca.provide('windows:about', {
-    dependsOn: { autoUpdater },
+    dependsOn: { autoUpdater, i18n, serverChannel },
     build: ({ dependsOn }) => setupAboutWindowReusable(dependsOn),
   })
 
   const chatWindow = injeca.provide('windows:chat', {
-    dependsOn: { widgetsManager, serverChannel },
+    dependsOn: { widgetsManager, serverChannel, mcpStdioManager, i18n },
     build: ({ dependsOn }) => setupChatWindowReusableFunc(dependsOn),
   })
 
   const settingsWindow = injeca.provide('windows:settings', {
-    dependsOn: { widgetsManager, beatSync, autoUpdater, devtoolsMarkdownStressWindow, serverChannel },
+    dependsOn: { widgetsManager, beatSync, autoUpdater, devtoolsWindow, serverChannel, mcpStdioManager, i18n, windowAuthManager },
     build: async ({ dependsOn }) => setupSettingsWindowReusableFunc(dependsOn),
   })
 
   const mainWindow = injeca.provide('windows:main', {
-    dependsOn: { settingsWindow, chatWindow, widgetsManager, noticeWindow, beatSync, autoUpdater, serverChannel },
+    dependsOn: { settingsWindow, chatWindow, widgetsManager, noticeWindow, beatSync, autoUpdater, serverChannel, mcpStdioManager, i18n, onboardingWindowManager, windowAuthManager },
     build: async ({ dependsOn }) => setupMainWindow(dependsOn),
   })
 
   const captionWindow = injeca.provide('windows:caption', {
-    dependsOn: { mainWindow, serverChannel },
+    dependsOn: { mainWindow, serverChannel, i18n },
     build: async ({ dependsOn }) => setupCaptionWindowManager(dependsOn),
   })
 
   const tray = injeca.provide('app:tray', {
-    dependsOn: { mainWindow, settingsWindow, captionWindow, widgetsWindow: widgetsManager, beatSyncBgWindow: beatSync, aboutWindow },
+    dependsOn: { mainWindow, settingsWindow, captionWindow, widgetsWindow: widgetsManager, serverChannel, beatSyncBgWindow: beatSync, aboutWindow, i18n },
     build: async ({ dependsOn }) => setupTray(dependsOn),
   })
 
   injeca.invoke({
-    dependsOn: { mainWindow, tray, serverChannel, pluginHost },
+    dependsOn: { mainWindow, tray, serverChannel, airiHttpServer, pluginHost, mcpStdioManager, onboardingWindow: onboardingWindowManager },
     callback: noop,
   })
 
@@ -161,8 +223,51 @@ app.on('window-all-closed', () => {
   }
 })
 
+let appExiting = false
+
 // Clean up server and intervals when app quits
-app.on('before-quit', async () => {
-  emitAppBeforeQuit()
-  injeca.stop()
+async function handleAppExit() {
+  if (appExiting)
+    return
+
+  appExiting = true
+
+  let exitedNormally = true
+
+  /**
+   * Safely execute fn and log any errors that occur, marking the exit as abnormal
+   * if an error is caught.
+   *
+   * @param operation - A verb phrase describing the operation.
+   * @param fn - Any function to execute. It can be either sync or async.
+   * @returns A promise that resolves when the operation is complete.
+   */
+  async function logIfError(operation: string, fn: () => unknown): Promise<void> {
+    try {
+      await fn()
+    }
+    catch (error) {
+      exitedNormally = false
+      log.withError(error).error(`[app-exit] Failed to ${operation}:`)
+    }
+  }
+
+  await Promise.all([
+    logIfError('execute onAppBeforeQuit hooks', () => emitAppBeforeQuit()),
+    logIfError('stop injeca', () => injeca.stop()),
+  ])
+
+  // Prevent the global log hook from trying to write to the file after close() is called,
+  // which would cause a recursive failure if close() itself throws.
+  skipFileLogging = true
+  await logIfError('flush file logs', () => fileLogger.close()) // Ensure all logs are flushed
+
+  app.exit(exitedNormally ? 0 : 1)
+}
+
+process.on('SIGINT', () => handleAppExit())
+
+app.on('before-quit', (event) => {
+  event.preventDefault()
+  handleAppExit()
 })

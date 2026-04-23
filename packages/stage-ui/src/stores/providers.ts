@@ -21,7 +21,8 @@ import type {
 import type { AliyunRealtimeSpeechExtraOptions } from './providers/aliyun/stream-transcription'
 
 import { isStageTamagotchi, isUrl } from '@proj-airi/stage-shared'
-import { computedAsync, useLocalStorage } from '@vueuse/core'
+import { getCachedWebGPUCapabilities, isWebGPUSupported } from '@proj-airi/stage-shared/webgpu'
+import { computedAsync, useIntervalFn, useLocalStorage } from '@vueuse/core'
 import {
   createOpenAI,
 } from '@xsai-ext/providers/create'
@@ -33,7 +34,7 @@ import {
   merge,
 } from '@xsai-ext/providers/utils'
 import { listModels } from '@xsai/model'
-import { isWebGPUSupported } from 'gpuu/webgpu'
+import { uniqBy } from 'es-toolkit'
 import { defineStore } from 'pinia'
 import {
   createUnAlibabaCloud,
@@ -46,13 +47,15 @@ import {
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
-import { listProviders as listDefinedProviders } from '../libs/providers'
-import { getKokoroWorker } from '../workers/kokoro'
+import { getKokoroAdapter } from '../libs/inference/adapters/kokoro'
+import { getProviderValidationIntervalMs, listProviders as listDefinedProviders, ProviderValidationCheck } from '../libs/providers'
 import { getDefaultKokoroModel, KOKORO_MODELS, kokoroModelsToModelInfo } from '../workers/kokoro/constants'
+import { useAuthStore } from './auth'
 import { createAliyunNLSProvider as createAliyunNlsStreamProvider } from './providers/aliyun/stream-transcription'
 import { convertProviderDefinitionsToMetadata } from './providers/converters'
 import { models as elevenLabsModels } from './providers/elevenlabs/list-models'
 import { buildOpenAICompatibleProvider } from './providers/openai-compatible-builder'
+import { buildOpenRouterAudioSpeechProvider } from './providers/openrouter/audio-speech'
 import { createWebSpeechAPIProvider } from './providers/web-speech-api'
 
 const ALIYUN_NLS_REGIONS = [
@@ -139,7 +142,14 @@ export interface ProviderMetadata {
     loadModel?: (config: Record<string, unknown>, hooks?: { onProgress?: (progress: ProgressInfo) => Promise<void> | void }) => Promise<void>
   }
   validators: {
-    validateProviderConfig: (config: Record<string, unknown>) => Promise<{
+    /**
+     * Validate a provider's configuration.
+     *
+     * PITFALL: When `skipChatPingCheck` is not set, the ChatCompletions validator
+     * (if present) may send a real `generateText("ping")` request that consumes
+     * API tokens. All automatic/background callers may consider pass `skipChatPingCheck: true`.
+     */
+    validateProviderConfig: (config: Record<string, unknown>, options?: { skipChatPingCheck?: boolean, onlyChatPingCheck?: boolean }) => Promise<{
       errors: unknown[]
       reason: string
       valid: boolean
@@ -148,7 +158,19 @@ export interface ProviderMetadata {
       reason: string
       valid: boolean
     }
+    /**
+     * Whether the "skip chat ping check" checkbox should be shown in the UI.
+     *
+     * Automatically derived: `true` when the provider has a ChatCompletions
+     * runtime validator AND `disableChatPingCheckUI` is not set on the definition.
+     */
+    chatPingCheckAvailable: boolean
   }
+  /**
+   * If true, the provider does not require user-provided credentials (e.g. API keys).
+   * Used for official/built-in providers that authenticate via session.
+   */
+  requiresCredentials?: boolean
   transcriptionFeatures?: {
     supportsGenerate: boolean
     supportsStreamOutput: boolean
@@ -244,7 +266,37 @@ export const useProvidersStore = defineStore('providers', () => {
   }
 
   // Centralized provider metadata with provider factory functions
+  const authState = useAuthStore()
   const providerMetadata: Record<string, ProviderMetadata> = {
+    'speech-noop': {
+      id: 'speech-noop',
+      category: 'speech',
+      tasks: ['text-to-speech', 'tts'],
+      nameKey: 'settings.pages.providers.provider.speech-noop.title',
+      name: 'None',
+      descriptionKey: 'settings.pages.providers.provider.speech-noop.description',
+      description: 'No speech output.',
+      icon: 'i-solar:volume-cross-bold-duotone',
+      defaultOptions: () => ({}),
+      createProvider: async () => ({
+        speech: () => ({
+          baseURL: 'http://speech-noop.invalid/v1/',
+          model: 'noop',
+        }),
+      }),
+      capabilities: {
+        listModels: async () => [],
+        listVoices: async () => [],
+      },
+      validators: {
+        chatPingCheckAvailable: false,
+        validateProviderConfig: () => ({
+          errors: [],
+          reason: '',
+          valid: true,
+        }),
+      },
+    },
     'app-local-audio-speech': buildOpenAICompatibleProvider({
       id: 'app-local-audio-speech',
       name: 'App (Local)',
@@ -258,6 +310,7 @@ export const useProvidersStore = defineStore('providers', () => {
       creator: createOpenAI,
       validation: [],
       validators: {
+        chatPingCheckAvailable: false,
         validateProviderConfig: (config) => {
           if (!config.baseUrl) {
             return {
@@ -288,6 +341,7 @@ export const useProvidersStore = defineStore('providers', () => {
       creator: createOpenAI,
       validation: [],
       validators: {
+        chatPingCheckAvailable: false,
         validateProviderConfig: (config) => {
           if (!config.baseUrl) {
             return {
@@ -318,6 +372,7 @@ export const useProvidersStore = defineStore('providers', () => {
       creator: createOpenAI,
       validation: [],
       validators: {
+        chatPingCheckAvailable: false,
         validateProviderConfig: (config) => {
           if (!config.baseUrl) {
             return {
@@ -348,6 +403,7 @@ export const useProvidersStore = defineStore('providers', () => {
       creator: createOpenAI,
       validation: [],
       validators: {
+        chatPingCheckAvailable: false,
         validateProviderConfig: (config) => {
           if (!config.baseUrl) {
             return {
@@ -376,7 +432,7 @@ export const useProvidersStore = defineStore('providers', () => {
       tasks: ['text-to-speech'],
       defaultBaseUrl: 'https://api.openai.com/v1/',
       creator: createOpenAI,
-      validation: ['health'],
+      validation: [ProviderValidationCheck.Health],
       capabilities: {
         // NOTE: OpenAI does not provide an API endpoint to retrieve available voices.
         // Voices are hardcoded here - this is a provider limitation, not an application limitation.
@@ -521,6 +577,7 @@ export const useProvidersStore = defineStore('providers', () => {
         },
       },
       validators: {
+        chatPingCheckAvailable: false,
         validateProviderConfig: (config) => {
           const errors = [
             !config.apiKey && new Error('API Key is required'),
@@ -607,7 +664,7 @@ export const useProvidersStore = defineStore('providers', () => {
       tasks: ['speech-to-text', 'automatic-speech-recognition', 'asr', 'stt'],
       defaultBaseUrl: 'https://api.openai.com/v1/',
       creator: createOpenAI,
-      validation: ['health'],
+      validation: [ProviderValidationCheck.Health],
       capabilities: {
         listModels: async () => {
           // OpenAI transcription models are hardcoded (no API endpoint to list them)
@@ -656,6 +713,7 @@ export const useProvidersStore = defineStore('providers', () => {
         },
       },
       validators: {
+        chatPingCheckAvailable: false,
         validateProviderConfig: (config) => {
           const errors = [
             !config.apiKey && new Error('API Key is required'),
@@ -757,6 +815,7 @@ export const useProvidersStore = defineStore('providers', () => {
         },
       },
       validators: {
+        chatPingCheckAvailable: false,
         validateProviderConfig: (config) => {
           const errors: Error[] = []
           const toString = (value: unknown) => typeof value === 'string' ? value.trim() : ''
@@ -836,6 +895,7 @@ export const useProvidersStore = defineStore('providers', () => {
         },
       },
       validators: {
+        chatPingCheckAvailable: false,
         validateProviderConfig: () => {
           // Web Speech API requires no configuration, just browser support
           // Always return valid if browser supports it, so it auto-configures
@@ -896,6 +956,10 @@ export const useProvidersStore = defineStore('providers', () => {
             ...provider.voice(),
           })
 
+          if (!voices || !Array.isArray(voices)) {
+            return []
+          }
+
           // Find indices of Aria and Bill
           const ariaIndex = voices.findIndex(voice => voice.name.includes('Aria'))
           const billIndex = voices.findIndex(voice => voice.name.includes('Bill'))
@@ -925,6 +989,7 @@ export const useProvidersStore = defineStore('providers', () => {
         },
       },
       validators: {
+        chatPingCheckAvailable: false,
         validateProviderConfig: (config) => {
           const errors = [
             !config.apiKey && new Error('API key is required.'),
@@ -1009,6 +1074,7 @@ export const useProvidersStore = defineStore('providers', () => {
         },
       },
       validators: {
+        chatPingCheckAvailable: false,
         validateProviderConfig: (config) => {
           const errors: Error[] = []
           if (!config.apiKey) {
@@ -1074,6 +1140,7 @@ export const useProvidersStore = defineStore('providers', () => {
         },
       },
       validators: {
+        chatPingCheckAvailable: false,
         validateProviderConfig: (config) => {
           const errors = [
             !config.apiKey && new Error('API key is required.'),
@@ -1104,13 +1171,14 @@ export const useProvidersStore = defineStore('providers', () => {
       iconColor: 'i-lobe-icons:bilibiliindex',
       defaultOptions: () => ({
         baseUrl: 'http://localhost:11996/tts/',
+        model: 'IndexTTS-1.5',
       }),
       createProvider: async (config) => {
         const provider: SpeechProvider = {
           speech: () => {
             const req = {
               baseURL: config.baseUrl as string,
-              model: 'IndexTTS-1.5',
+              model: (config.model as string) || 'IndexTTS-1.5',
             }
             return req
           },
@@ -1118,6 +1186,18 @@ export const useProvidersStore = defineStore('providers', () => {
         return provider
       },
       capabilities: {
+        listModels: async () => {
+          return [
+            {
+              id: 'IndexTTS-1.5',
+              name: 'IndexTTS-1.5',
+              provider: 'index-tts-vllm',
+              description: 'Default model for Index-TTS vLLM deployment',
+              contextLength: 0,
+              deprecated: false,
+            },
+          ]
+        },
         listVoices: async (config) => {
           const voicesUrl = config.baseUrl as string
           const response = await fetch(`${voicesUrl}audio/voices`)
@@ -1137,6 +1217,7 @@ export const useProvidersStore = defineStore('providers', () => {
         },
       },
       validators: {
+        chatPingCheckAvailable: false,
         validateProviderConfig: async (config) => {
           const errors = [
             !config.baseUrl && new Error('Base URL is required. Default to http://localhost:11996/tts/ for Index-TTS.'),
@@ -1210,6 +1291,7 @@ export const useProvidersStore = defineStore('providers', () => {
         },
       },
       validators: {
+        chatPingCheckAvailable: false,
         validateProviderConfig: (config) => {
           const errors = [
             !config.apiKey && new Error('API key is required.'),
@@ -1275,6 +1357,7 @@ export const useProvidersStore = defineStore('providers', () => {
         },
       },
       validators: {
+        chatPingCheckAvailable: false,
         validateProviderConfig: (config) => {
           const errors = [
             !config.apiKey && new Error('API key is required.'),
@@ -1295,6 +1378,170 @@ export const useProvidersStore = defineStore('providers', () => {
         },
       },
     },
+    'minimax-speech': {
+      id: 'minimax-speech',
+      category: 'speech',
+      tasks: ['text-to-speech'],
+      nameKey: 'settings.pages.providers.provider.minimax-speech.title',
+      name: 'MiniMax Speech',
+      descriptionKey: 'settings.pages.providers.provider.minimax-speech.description',
+      description: 'minimax.io',
+      icon: 'i-lobe-icons:minimax',
+      iconColor: 'i-lobe-icons:minimax-color',
+      defaultOptions: () => ({
+        apiKey: '',
+        baseUrl: 'https://api.minimax.io',
+      }),
+      createProvider: async (config) => {
+        const apiKey = (config.apiKey as string).trim()
+        const baseUrl = ((config.baseUrl as string) || 'https://api.minimax.io').replace(/\/$/, '')
+
+        const provider: SpeechProvider = {
+          speech: () => ({
+            baseURL: `${baseUrl}/v1/`,
+            model: 'speech-2.8-hd',
+            fetch: async (_input: RequestInfo | URL, init?: RequestInit) => {
+              if (!init?.body || typeof init.body !== 'string') {
+                throw new Error('Invalid request body')
+              }
+
+              const body = JSON.parse(init.body)
+              const text = body.input as string
+              const voiceId = (body.voice as string) || 'English_Graceful_Lady'
+              const model = (body.model as string) || 'speech-2.8-hd'
+
+              const response = await fetch(`${baseUrl}/v1/t2a_v2`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${apiKey}`,
+                },
+                body: JSON.stringify({
+                  model,
+                  text,
+                  stream: true,
+                  voice_setting: {
+                    voice_id: voiceId,
+                    speed: 1,
+                    vol: 1,
+                    pitch: 0,
+                  },
+                  audio_setting: {
+                    sample_rate: 32000,
+                    bitrate: 128000,
+                    format: 'mp3',
+                    channel: 1,
+                  },
+                }),
+              })
+
+              if (!response.ok || !response.body) {
+                throw new Error(`MiniMax TTS request failed: ${response.status} ${response.statusText}`)
+              }
+
+              // Parse SSE stream and collect hex-encoded audio chunks
+              const reader = response.body.getReader()
+              const decoder = new TextDecoder()
+              const audioChunks: Uint8Array[] = []
+              let buffer = ''
+
+              while (true) {
+                const { done, value } = await reader.read()
+                if (done)
+                  break
+                buffer += decoder.decode(value, { stream: true })
+                const lines = buffer.split('\n')
+                buffer = lines.pop() || ''
+                for (const line of lines) {
+                  if (!line.startsWith('data:'))
+                    continue
+                  const jsonStr = line.slice(5).trim()
+                  if (!jsonStr || jsonStr === '[DONE]')
+                    continue
+                  try {
+                    const eventData = JSON.parse(jsonStr)
+                    const audio = eventData?.data?.audio
+                    // status 2 is the final summary chunk; skip it to avoid duplication
+                    if (audio && eventData?.data?.status !== 2) {
+                      const hexStr = audio as string
+                      const bytes = new Uint8Array(hexStr.length / 2)
+                      for (let i = 0; i < hexStr.length; i += 2) {
+                        bytes[i / 2] = Number.parseInt(hexStr.slice(i, i + 2), 16)
+                      }
+                      audioChunks.push(bytes)
+                    }
+                  }
+                  catch {
+                    // ignore malformed SSE events
+                  }
+                }
+              }
+
+              const totalLength = audioChunks.reduce((sum, chunk) => sum + chunk.length, 0)
+              const combined = new Uint8Array(totalLength)
+              let offset = 0
+              for (const chunk of audioChunks) {
+                combined.set(chunk, offset)
+                offset += chunk.length
+              }
+
+              return new Response(combined.buffer, {
+                status: 200,
+                headers: { 'Content-Type': 'audio/mpeg' },
+              })
+            },
+          }),
+        }
+        return provider
+      },
+      capabilities: {
+        listModels: async () => [
+          {
+            id: 'speech-2.8-hd',
+            name: 'Speech 2.8 HD',
+            provider: 'minimax-speech',
+            description: 'High-definition TTS model with natural prosody',
+            contextLength: 0,
+            deprecated: false,
+          },
+          {
+            id: 'speech-2.8-turbo',
+            name: 'Speech 2.8 Turbo',
+            provider: 'minimax-speech',
+            description: 'Fast TTS model for low-latency scenarios',
+            contextLength: 0,
+            deprecated: false,
+          },
+        ],
+        listVoices: async () => [
+          { id: 'English_Graceful_Lady', name: 'Graceful Lady', provider: 'minimax-speech', gender: 'female', languages: [{ code: 'en', title: 'English' }] },
+          { id: 'English_Insightful_Speaker', name: 'Insightful Speaker', provider: 'minimax-speech', gender: 'male', languages: [{ code: 'en', title: 'English' }] },
+          { id: 'English_radiant_girl', name: 'Radiant Girl', provider: 'minimax-speech', gender: 'female', languages: [{ code: 'en', title: 'English' }] },
+          { id: 'English_Persuasive_Man', name: 'Persuasive Man', provider: 'minimax-speech', gender: 'male', languages: [{ code: 'en', title: 'English' }] },
+          { id: 'English_Lucky_Robot', name: 'Lucky Robot', provider: 'minimax-speech', gender: 'neutral', languages: [{ code: 'en', title: 'English' }] },
+          { id: 'English_expressive_narrator', name: 'Expressive Narrator', provider: 'minimax-speech', gender: 'neutral', languages: [{ code: 'en', title: 'English' }] },
+          { id: 'Mandarin_Gentle_Woman', name: 'Gentle Woman', provider: 'minimax-speech', gender: 'female', languages: [{ code: 'zh', title: 'Chinese' }] },
+          { id: 'Mandarin_Steadfast_Man', name: 'Steadfast Man', provider: 'minimax-speech', gender: 'male', languages: [{ code: 'zh', title: 'Chinese' }] },
+          { id: 'Mandarin_Sweet_Girl', name: 'Sweet Girl', provider: 'minimax-speech', gender: 'female', languages: [{ code: 'zh', title: 'Chinese' }] },
+          { id: 'Mandarin_Magnetic_Gentleman', name: 'Magnetic Gentleman', provider: 'minimax-speech', gender: 'male', languages: [{ code: 'zh', title: 'Chinese' }] },
+        ],
+      },
+      validators: {
+        chatPingCheckAvailable: false,
+        validateProviderConfig: (config) => {
+          const errors = [
+            !config.apiKey && new Error('API key is required.'),
+          ].filter(Boolean)
+
+          return {
+            errors,
+            reason: errors.filter(e => e).map(e => String(e)).join(', ') || '',
+            valid: !!config.apiKey,
+          }
+        },
+      },
+    },
+    'openrouter-audio-speech': buildOpenRouterAudioSpeechProvider(v => baseUrlValidator.value(v)),
     'comet-api-speech': buildOpenAICompatibleProvider({
       id: 'comet-api-speech',
       name: 'CometAPI Speech',
@@ -1309,7 +1556,7 @@ export const useProvidersStore = defineStore('providers', () => {
         createModelProvider({ apiKey, baseURL }),
         createSpeechProvider({ apiKey, baseURL }),
       ),
-      validation: ['model_list'],
+      validation: [ProviderValidationCheck.ModelList],
     }),
     'comet-api-transcription': buildOpenAICompatibleProvider({
       id: 'comet-api-transcription',
@@ -1325,7 +1572,7 @@ export const useProvidersStore = defineStore('providers', () => {
         createModelProvider({ apiKey, baseURL }),
         createTranscriptionProvider({ apiKey, baseURL }),
       ),
-      validation: ['model_list'],
+      validation: [ProviderValidationCheck.ModelList],
     }),
     'player2-speech': {
       id: 'player2-speech',
@@ -1408,6 +1655,7 @@ export const useProvidersStore = defineStore('providers', () => {
         },
       },
       validators: {
+        chatPingCheckAvailable: false,
         validateProviderConfig: async (config) => {
           const errors = [
             !config.baseUrl && new Error('Base URL is required. Default to http://localhost:4315/v1/'),
@@ -1436,8 +1684,10 @@ export const useProvidersStore = defineStore('providers', () => {
       icon: 'i-lobe-icons:speaker',
 
       defaultOptions: () => {
-        const hasWebGPU = typeof navigator !== 'undefined' && !!navigator.gpu
-        const model = getDefaultKokoroModel(hasWebGPU)
+        const capabilities = getCachedWebGPUCapabilities()
+        const hasWebGPU = capabilities?.supported ?? (typeof navigator !== 'undefined' && !!navigator.gpu)
+        const fp16Supported = capabilities?.fp16Supported ?? false
+        const model = getDefaultKokoroModel(hasWebGPU, fp16Supported)
         return {
           model,
           voiceId: '',
@@ -1446,7 +1696,7 @@ export const useProvidersStore = defineStore('providers', () => {
 
       createProvider: async (_config) => {
         // Import the worker manager
-        const workerManagerPromise = getKokoroWorker()
+        const workerManagerPromise = getKokoroAdapter()
 
         const provider: SpeechProvider = {
           speech: () => {
@@ -1491,8 +1741,10 @@ export const useProvidersStore = defineStore('providers', () => {
 
       capabilities: {
         listModels: async (_config: Record<string, unknown>) => {
-          const hasWebGPU = typeof navigator !== 'undefined' && !!navigator.gpu
-          return kokoroModelsToModelInfo(hasWebGPU, t)
+          const caps = getCachedWebGPUCapabilities()
+          const hasWebGPU = caps?.supported ?? (typeof navigator !== 'undefined' && !!navigator.gpu)
+          const fp16Supported = caps?.fp16Supported ?? false
+          return kokoroModelsToModelInfo(hasWebGPU, t, fp16Supported)
         },
 
         loadModel: async (config: Record<string, unknown>, _hooks?: { onProgress?: (progress: ProgressInfo) => Promise<void> | void }) => {
@@ -1509,15 +1761,30 @@ export const useProvidersStore = defineStore('providers', () => {
 
           // Validate platform requirements
           if (modelDef.platform === 'webgpu') {
-            const hasWebGPU = typeof navigator !== 'undefined' && !!navigator.gpu
+            const hasWebGPU = getCachedWebGPUCapabilities()?.supported ?? (typeof navigator !== 'undefined' && !!navigator.gpu)
             if (!hasWebGPU) {
               throw new Error('WebGPU is required for this model but is not available in your browser')
             }
           }
 
           try {
-            const workerManager = await getKokoroWorker()
-            await workerManager.loadModel(modelDef.quantization, modelDef.platform, { onProgress: _hooks?.onProgress })
+            const workerManager = await getKokoroAdapter()
+            await workerManager.loadModel(modelDef.quantization, modelDef.platform, {
+              onProgress: _hooks?.onProgress
+                ? (p) => {
+                    // Map unified ProgressPayload back to ProgressInfo shape
+                    // that the provider hooks expect (HuggingFace transformers format)
+                    _hooks.onProgress!({
+                      name: p.file ?? '',
+                      file: p.file ?? '',
+                      progress: p.percent >= 0 ? p.percent : 0,
+                      status: 'progress',
+                      loaded: p.loaded ?? 0,
+                      total: p.total ?? 0,
+                    } as ProgressInfo)
+                  }
+                : undefined,
+            })
           }
           catch (error) {
             console.error('Failed to load Kokoro model:', error)
@@ -1525,67 +1792,71 @@ export const useProvidersStore = defineStore('providers', () => {
           }
         },
 
-        listVoices: async (config: Record<string, unknown>) => {
-          try {
-            // Reload the model before fetching voices
-            const modelId = config.model as string
-            if (modelId) {
-              const modelDef = KOKORO_MODELS.find(m => m.id === modelId)
-              if (modelDef) {
-                // Validate platform requirements
-                if (modelDef.platform === 'webgpu') {
-                  const hasWebGPU = typeof navigator !== 'undefined' && !!navigator.gpu
-                  if (!hasWebGPU) {
-                    throw new Error('WebGPU is required for this model but is not available in your browser')
+        listVoices: (() => {
+          let lastLoadedModelId: string | null = null
+          return async (config: Record<string, unknown>) => {
+            try {
+              const workerManager = await getKokoroAdapter()
+              const modelId = config.model as string
+
+              // Reload the model if it hasn't been loaded yet or if the model ID changed
+              if (workerManager.state !== 'ready' || (modelId && modelId !== lastLoadedModelId)) {
+                if (modelId) {
+                  const modelDef = KOKORO_MODELS.find(m => m.id === modelId)
+                  if (modelDef) {
+                    if (modelDef.platform === 'webgpu') {
+                      const hasWebGPU = getCachedWebGPUCapabilities()?.supported ?? (typeof navigator !== 'undefined' && !!navigator.gpu)
+                      if (!hasWebGPU) {
+                        throw new Error('WebGPU is required for this model but is not available in your browser')
+                      }
+                    }
+
+                    await workerManager.loadModel(modelDef.quantization, modelDef.platform)
+                    lastLoadedModelId = modelId
                   }
                 }
-
-                // Load the model
-                const workerManager = await getKokoroWorker()
-                await workerManager.loadModel(modelDef.quantization, modelDef.platform)
               }
-            }
 
-            // Get worker manager and fetch voices from the model
-            const workerManager = await getKokoroWorker()
-            const modelVoices = workerManager.getVoices()
+              const modelVoices = workerManager.getVoices()
 
-            // Language code mapping
-            const languageMap: Record<string, { code: string, title: string }> = {
-              'en-us': { code: 'en-US', title: 'English (US)' },
-              'en-gb': { code: 'en-GB', title: 'English (UK)' },
-              'ja': { code: 'ja', title: 'Japanese' },
-              'zh-cn': { code: 'zh-CN', title: 'Chinese (Mandarin)' },
-              'es': { code: 'es', title: 'Spanish' },
-              'fr': { code: 'fr', title: 'French' },
-              'hi': { code: 'hi', title: 'Hindi' },
-              'it': { code: 'it', title: 'Italian' },
-              'pt-br': { code: 'pt-BR', title: 'Portuguese (Brazil)' },
-            }
-
-            // Transform the voices object to the expected array format
-            return Object.entries(modelVoices).map(([id, voice]: [string, { language: string, name: string, gender: string }]) => {
-              const languageCode = voice.language.toLowerCase()
-              const languageInfo = languageMap[languageCode] || { code: languageCode, title: voice.language }
-
-              return {
-                id,
-                name: `${voice.name} (${voice.gender}, ${languageInfo.title.split('(')[0].trim()})`,
-                provider: 'kokoro-local',
-                languages: [languageInfo],
-                gender: voice.gender.toLowerCase(),
+              // Language code mapping
+              const languageMap: Record<string, { code: string, title: string }> = {
+                'en-us': { code: 'en-US', title: 'English (US)' },
+                'en-gb': { code: 'en-GB', title: 'English (UK)' },
+                'ja': { code: 'ja', title: 'Japanese' },
+                'zh-cn': { code: 'zh-CN', title: 'Chinese (Mandarin)' },
+                'es': { code: 'es', title: 'Spanish' },
+                'fr': { code: 'fr', title: 'French' },
+                'hi': { code: 'hi', title: 'Hindi' },
+                'it': { code: 'it', title: 'Italian' },
+                'pt-br': { code: 'pt-BR', title: 'Portuguese (Brazil)' },
               }
-            })
+
+              // Transform the voices object to the expected array format
+              return Object.entries(modelVoices).map(([id, voice]: [string, { language: string, name: string, gender: string }]) => {
+                const languageCode = voice.language.toLowerCase()
+                const languageInfo = languageMap[languageCode] || { code: languageCode, title: voice.language }
+
+                return {
+                  id,
+                  name: `${voice.name} (${voice.gender}, ${languageInfo.title.split('(')[0].trim()})`,
+                  provider: 'kokoro-local',
+                  languages: [languageInfo],
+                  gender: voice.gender.toLowerCase(),
+                }
+              })
+            }
+            catch (error) {
+              console.error('Failed to fetch Kokoro voices:', error)
+              // Return empty array if model not loaded yet
+              return []
+            }
           }
-          catch (error) {
-            console.error('Failed to fetch Kokoro voices:', error)
-            // Return empty array if model not loaded yet
-            return []
-          }
-        },
+        })(),
       },
 
       validators: {
+        chatPingCheckAvailable: false,
         validateProviderConfig: async (config: any) => {
           const model = config.model as string
 
@@ -1618,31 +1889,43 @@ export const useProvidersStore = defineStore('providers', () => {
   // Progressive migration bridge:
   // translate unified provider definitions from libs/providers to legacy store metadata.
   // Existing metadata remains as fallback for providers not yet migrated.
+  const definedProviders = listDefinedProviders()
+
   const translatedProviderMetadata = convertProviderDefinitionsToMetadata(
-    listDefinedProviders(),
+    definedProviders,
     t,
     providerMetadata,
   )
 
-  // Keep only legacy ASR/TTS providers as hand-written metadata.
-  // All other categories are sourced from unified definitions in libs/providers.
-  for (const [providerId, existing] of Object.entries(providerMetadata)) {
-    if (existing.category !== 'speech' && existing.category !== 'transcription') {
-      delete providerMetadata[providerId]
+  const providerValidationIntervalMsById = new Map<string, number>()
+  for (const definition of definedProviders) {
+    const intervalMs = getProviderValidationIntervalMs({
+      definition,
+      contextOptions: { t },
+    })
+    if (intervalMs && intervalMs > 0) {
+      providerValidationIntervalMsById.set(definition.id, intervalMs)
     }
   }
 
-  // Populate non-speech providers from unified registry translation.
+  // Merge unified registry definitions into providerMetadata.
+  // Unified defineProvider() entries always take precedence over legacy hand-written
+  // metadata. Legacy entries are kept only as fallback for providers not yet migrated
+  // to defineProvider().
+  // TODO: progressively migrate legacy speech/transcription providers to defineProvider()
+  // and remove the hand-written metadata above entirely.
   for (const [providerId, translated] of Object.entries(translatedProviderMetadata)) {
-    if (translated.category === 'speech' || translated.category === 'transcription') {
-      continue
-    }
     providerMetadata[providerId] = translated
   }
 
   // const validatedCredentials = ref<Record<string, string>>({})
   const providerRuntimeState = ref<Record<string, ProviderRuntimeState>>({})
+<<<<<<< HEAD
   const providerValidationRetryState = ref<Record<string, ProviderValidationRetryState>>({})
+=======
+  const providerValidationInFlight = new Map<string, Promise<boolean>>()
+  const providerRevalidationLoops = new Map<string, { resume: () => void }>()
+>>>>>>> origin/main
 
   const configuredProviders = computed(() => {
     const result: Record<string, boolean> = {}
@@ -1662,7 +1945,7 @@ export const useProvidersStore = defineStore('providers', () => {
   }
 
   // Configuration validation functions
-  async function validateProvider(providerId: string): Promise<boolean> {
+  async function validateProvider(providerId: string, options: { force?: boolean } = {}): Promise<boolean> {
     const metadata = providerMetadata[providerId]
     if (!metadata)
       return false
@@ -1680,26 +1963,53 @@ export const useProvidersStore = defineStore('providers', () => {
 
     const configString = JSON.stringify(config || {})
     const runtimeState = providerRuntimeState.value[providerId]
+    const cacheKey = `${providerId}:${configString}`
+    const forceValidation = options.force === true
 
+<<<<<<< HEAD
     if (runtimeState?.validatedCredentialHash === configString && runtimeState.isConfigured === true)
       return true
+=======
+    if (!forceValidation && runtimeState?.validatedCredentialHash === configString && typeof runtimeState.isConfigured === 'boolean')
+      return runtimeState.isConfigured
+>>>>>>> origin/main
 
-    // Always cache the current config string to prevent re-validating the same config
-    if (providerRuntimeState.value[providerId]) {
-      providerRuntimeState.value[providerId].validatedCredentialHash = configString
-    }
-
-    const validationResult = await metadata.validators.validateProviderConfig(config || {})
-
-    if (providerRuntimeState.value[providerId]) {
-      providerRuntimeState.value[providerId].isConfigured = validationResult.valid
-      // Auto-mark Web Speech API as added if valid and available
-      if (validationResult.valid && ['browser-web-speech-api', 'player2'].includes(providerId)) {
-        markProviderAdded(providerId)
+    if (!forceValidation) {
+      const pending = providerValidationInFlight.get(cacheKey)
+      if (pending) {
+        return pending
       }
     }
 
-    return validationResult.valid
+    const runValidation = async () => {
+      // PITFALL: Please consider skip chat ping check during automatic/background validation,
+      // since this can consume API tokens and may only be triggered
+      // by user action (e.g. "Ping API" button on settings pages) or other user intentions.
+      const validationResult = await metadata.validators.validateProviderConfig(config || {}, {
+        skipChatPingCheck: true,
+      })
+
+      if (providerRuntimeState.value[providerId]) {
+        providerRuntimeState.value[providerId].isConfigured = validationResult.valid
+        providerRuntimeState.value[providerId].validatedCredentialHash = configString
+        // Auto-mark Web Speech API as added if valid and available
+        if (validationResult.valid && ['browser-web-speech-api', 'player2'].includes(providerId)) {
+          markProviderAdded(providerId)
+        }
+      }
+
+      return validationResult.valid
+    }
+
+    if (forceValidation) {
+      return runValidation()
+    }
+
+    const task = runValidation()
+    providerValidationInFlight.set(cacheKey, task)
+    return task.finally(() => {
+      providerValidationInFlight.delete(cacheKey)
+    })
   }
 
   // Create computed properties for each provider's configuration status
@@ -1709,7 +2019,7 @@ export const useProvidersStore = defineStore('providers', () => {
     const defaultOptions = metadata?.defaultOptions?.() || {}
     return {
       ...defaultOptions,
-      ...(Object.prototype.hasOwnProperty.call(defaultOptions, 'baseUrl') ? {} : { baseUrl: '' }),
+      ...(Object.hasOwn(defaultOptions, 'baseUrl') ? {} : { baseUrl: '' }),
     }
   }
 
@@ -1802,6 +2112,23 @@ export const useProvidersStore = defineStore('providers', () => {
     }, PROVIDER_VALIDATION_RETRY_DELAY_MS)
   }
 
+  function startPeriodicRuntimeValidation() {
+    for (const [providerId, intervalMs] of providerValidationIntervalMsById.entries()) {
+      if (!providerMetadata[providerId] || intervalMs <= 0)
+        continue
+
+      if (providerRevalidationLoops.has(providerId)) {
+        continue
+      }
+
+      const loop = useIntervalFn(() => {
+        void validateProvider(providerId, { force: true })
+      }, intervalMs, { immediate: false, immediateCallback: false })
+      loop.resume()
+      providerRevalidationLoops.set(providerId, loop)
+    }
+  }
+
   // Update configuration status for all configured providers
   async function updateConfigurationStatus() {
     await Promise.all(Object.entries(providerMetadata)
@@ -1827,10 +2154,18 @@ export const useProvidersStore = defineStore('providers', () => {
       }))
   }
 
+<<<<<<< HEAD
   watch(providerCredentials, async () => {
     Object.keys(providerMetadata).forEach(providerId => clearProviderValidationRetry(providerId, true))
     await updateConfigurationStatus()
   }, { deep: true, immediate: true })
+=======
+  // Call initially and watch for changes
+  watch(providerCredentials, updateConfigurationStatus, { deep: true, immediate: true })
+  startPeriodicRuntimeValidation()
+
+  watch(() => authState.isAuthenticated, updateConfigurationStatus)
+>>>>>>> origin/main
 
   // Available providers (only those that are properly configured)
   const availableProviders = computed(() => Object.keys(providerMetadata).filter(providerId => providerRuntimeState.value[providerId]?.isConfigured))
@@ -1880,6 +2215,14 @@ export const useProvidersStore = defineStore('providers', () => {
     markProviderAdded(providerId)
   }
 
+  function setProviderUnconfigured(providerId: string) {
+    if (providerRuntimeState.value[providerId]) {
+      providerRuntimeState.value[providerId].isConfigured = false
+      providerRuntimeState.value[providerId].validatedCredentialHash = undefined
+    }
+    unmarkProviderAdded(providerId)
+  }
+
   async function resetProviderSettings() {
     Object.keys(providerValidationRetryState.value).forEach(providerId => clearProviderValidationRetry(providerId, true))
     providerCredentials.value = {}
@@ -1893,12 +2236,12 @@ export const useProvidersStore = defineStore('providers', () => {
 
   // Function to fetch models for a specific provider
   async function fetchModelsForProvider(providerId: string) {
-    const config = providerCredentials.value[providerId]
-    if (!config)
-      return []
-
     const metadata = providerMetadata[providerId]
     if (!metadata)
+      return []
+
+    const config = providerCredentials.value[providerId]
+    if (!config && metadata.requiresCredentials !== false)
       return []
 
     const runtimeState = providerRuntimeState.value[providerId]
@@ -1908,18 +2251,19 @@ export const useProvidersStore = defineStore('providers', () => {
     }
 
     try {
-      const models = metadata.capabilities.listModels ? await metadata.capabilities.listModels(config) : []
+      const models = metadata.capabilities.listModels ? await metadata.capabilities.listModels(config || {}) : []
 
       // Transform and store the models
       if (runtimeState) {
-        runtimeState.models = models.map(model => ({
-          id: model.id,
-          name: model.name,
-          description: model.description,
-          contextLength: model.contextLength,
-          deprecated: model.deprecated,
-          provider: providerId,
-        }))
+        runtimeState.models = uniqBy(models.filter(model => !!model.id), m => m.id)
+          .map(model => ({
+            id: model.id,
+            name: model.name,
+            description: model.description,
+            contextLength: model.contextLength,
+            deprecated: model.deprecated,
+            provider: providerId,
+          }))
         return runtimeState.models
       }
       return []
@@ -2002,14 +2346,27 @@ export const useProvidersStore = defineStore('providers', () => {
     }
   }
 
-  // Get all providers metadata (for settings page)
+  // Get all providers metadata (for settings page).
+  // Order: defined providers first (already sorted by order in registry), then legacy-only providers.
+  const definedProviderIds = new Set(definedProviders.map(d => d.id))
+
   const allProvidersMetadata = computed(() => {
-    return Object.values(providerMetadata).map(metadata => ({
+    const localize = (metadata: ProviderMetadata) => ({
       ...metadata,
       localizedName: t(metadata.nameKey, metadata.name),
       localizedDescription: t(metadata.descriptionKey, metadata.description),
       configured: providerRuntimeState.value[metadata.id]?.isConfigured || false,
-    }))
+    })
+
+    const ordered = definedProviders
+      .filter(d => providerMetadata[d.id])
+      .map(d => localize(providerMetadata[d.id]))
+
+    const legacy = Object.values(providerMetadata)
+      .filter(m => !definedProviderIds.has(m.id))
+      .map(localize)
+
+    return [...ordered, ...legacy]
   })
 
   function getTranscriptionFeatures(providerId: string) {
@@ -2042,14 +2399,15 @@ export const useProvidersStore = defineStore('providers', () => {
     if (!metadata)
       throw new Error(`Provider metadata for ${providerId} not found`)
 
-    // Web Speech API doesn't require credentials - use empty config
+    // Providers that don't require credentials use empty config
     let config = providerCredentials.value[providerId]
-    if (!config && providerId === 'browser-web-speech-api') {
-      config = getDefaultProviderConfig(providerId)
+    const noCredentials = metadata.requiresCredentials === false || providerId === 'browser-web-speech-api'
+    if (!config && noCredentials) {
+      config = getDefaultProviderConfig(providerId) || {}
       providerCredentials.value[providerId] = config
     }
 
-    if (!config && providerId !== 'browser-web-speech-api')
+    if (!config && !noCredentials)
       throw new Error(`Provider credentials for ${providerId} not found`)
 
     try {
@@ -2153,6 +2511,7 @@ export const useProvidersStore = defineStore('providers', () => {
     deleteProvider,
     availableProviders,
     configuredProviders,
+    providerRuntimeState,
     providerMetadata,
     getProviderMetadata,
     getTranscriptionFeatures,
@@ -2170,6 +2529,7 @@ export const useProvidersStore = defineStore('providers', () => {
     disposeProviderInstance,
     resetProviderSettings,
     forceProviderConfigured,
+    setProviderUnconfigured,
     availableProvidersMetadata,
     allChatProvidersMetadata,
     allAudioSpeechProvidersMetadata,

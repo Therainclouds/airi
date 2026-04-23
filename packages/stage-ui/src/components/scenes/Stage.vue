@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import type { DuckDBWasmDrizzleDatabase } from '@proj-airi/drizzle-duckdb-wasm'
 import type { Live2DLipSync, Live2DLipSyncOptions } from '@proj-airi/model-driver-lipsync'
 import type { Profile } from '@proj-airi/model-driver-lipsync/shared/wlipsync'
 import type { SpeechProviderWithExtraOptions } from '@xsai-ext/providers/utils'
@@ -7,13 +6,17 @@ import type { UnElevenLabsOptions } from 'unspeech'
 
 import type { EmotionPayload } from '../../constants/emotions'
 
-import { drizzle } from '@proj-airi/drizzle-duckdb-wasm'
-import { getImportUrlBundles } from '@proj-airi/drizzle-duckdb-wasm/bundles/import-url-browser'
 import { createLive2DLipSync } from '@proj-airi/model-driver-lipsync'
 import { wlipsyncProfile } from '@proj-airi/model-driver-lipsync/shared/wlipsync'
+<<<<<<< HEAD
 import { createPlaybackManager, createSpeechPipeline, createTtsSegmentStream } from '@proj-airi/pipelines-audio'
 import { defaultModelParameters, Live2DScene, useLive2d } from '@proj-airi/stage-ui-live2d'
 import { ThreeScene, useModelStore } from '@proj-airi/stage-ui-three'
+=======
+import { createPlaybackManager, createSpeechPipeline } from '@proj-airi/pipelines-audio'
+import { Live2DScene, useLive2d } from '@proj-airi/stage-ui-live2d'
+import { ThreeScene } from '@proj-airi/stage-ui-three'
+>>>>>>> origin/main
 import { animations } from '@proj-airi/stage-ui-three/assets/vrm'
 import { createQueue } from '@proj-airi/stream-kit'
 import { useBroadcastChannel } from '@vueuse/core'
@@ -25,6 +28,10 @@ import { storeToRefs } from 'pinia'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 
 import { useDelayMessageQueue, useEmotionsMessageQueue } from '../../composables/queues'
+import { useAuthProviderSync } from '../../composables/use-auth-provider-sync'
+import { useDuckDb } from '../../composables/use-duck-db'
+import { useIOTraceBridge } from '../../composables/use-io-trace-bridge'
+import { initIOTracer } from '../../composables/use-io-tracer'
 import { llmInferenceEndToken } from '../../constants'
 import { Emotion, EMOTION_EmotionMotionName_value, EMOTION_VRMExpressionName_value } from '../../constants/emotions'
 import { useAudioContext, useSpeakingStore } from '../../stores/audio'
@@ -35,8 +42,9 @@ import { useProvidersStore } from '../../stores/providers'
 import { useSettings } from '../../stores/settings'
 import { useSettingsAudioDevice } from '../../stores/settings/audio-device'
 import { useSpeechRuntimeStore } from '../../stores/speech-runtime'
+import { shouldRunLive2dLipSyncLoop } from './runtime'
 
-withDefaults(defineProps<{
+const props = withDefaults(defineProps<{
   paused?: boolean
   focusAt: { x: number, y: number }
   xOffset?: number | string
@@ -46,7 +54,7 @@ withDefaults(defineProps<{
 
 const componentState = defineModel<'pending' | 'loading' | 'mounted'>('state', { default: 'pending' })
 
-const db = ref<DuckDBWasmDrizzleDatabase>()
+const { getDb } = useDuckDb()
 // const transformersProvider = createTransformers({ embedWorkerURL })
 
 const vrmViewerRef = ref<InstanceType<typeof ThreeScene>>()
@@ -64,10 +72,15 @@ const {
   live2dIdleAnimationEnabled,
   live2dAutoBlinkEnabled,
   live2dForceAutoBlinkEnabled,
+  live2dExpressionEnabled,
   live2dShadowEnabled,
   live2dMaxFps,
+<<<<<<< HEAD
   live2dDebugControlsEnabled,
   live2dEmotionMotionMap,
+=======
+  live2dRenderScale,
+>>>>>>> origin/main
 } = storeToRefs(settingsStore)
 const { mouthOpenSize } = storeToRefs(useSpeakingStore())
 const { audioContext } = useAudioContext()
@@ -80,9 +93,8 @@ const chatHookCleanups: Array<() => void> = []
 //             cross-window broadcast wiring.
 
 const providersStore = useProvidersStore()
+useAuthProviderSync()
 const live2dStore = useLive2d()
-const vrmStore = useModelStore()
-
 const showStage = ref(true)
 const viewUpdateCleanups: Array<() => void> = []
 
@@ -99,14 +111,6 @@ type PresentEvent
 const { post: postPresent } = useBroadcastChannel<PresentEvent, PresentEvent>({ name: 'airi-chat-present' })
 
 viewUpdateCleanups.push(live2dStore.onShouldUpdateView(async () => {
-  showStage.value = false
-  await settingsStore.updateStageModel()
-  setTimeout(() => {
-    showStage.value = true
-  }, 100)
-}))
-
-viewUpdateCleanups.push(vrmStore.onShouldUpdateView(async () => {
   showStage.value = false
   await settingsStore.updateStageModel()
   setTimeout(() => {
@@ -718,7 +722,11 @@ const speechPipeline = createSpeechPipeline<AudioBuffer>({
     if (signal.aborted)
       return null
 
+<<<<<<< HEAD
     if (!narrationEnabled.value)
+=======
+    if (activeSpeechProvider.value === 'speech-noop')
+>>>>>>> origin/main
       return null
 
     if (!activeSpeechProvider.value)
@@ -823,6 +831,8 @@ const speechPipeline = createSpeechPipeline<AudioBuffer>({
   }),
 })
 
+initIOTracer()
+useIOTraceBridge(speechPipeline)
 void speechRuntimeStore.registerHost(speechPipeline)
 
 speechPipeline.on('onSpecial', (segment) => {
@@ -881,7 +891,48 @@ function startLipSyncLoop() {
   lipSyncLoopId.value = requestAnimationFrame(tick)
 }
 
+function stopLipSyncLoop() {
+  if (lipSyncLoopId.value) {
+    cancelAnimationFrame(lipSyncLoopId.value)
+    lipSyncLoopId.value = undefined
+  }
+
+  mouthOpenSize.value = 0
+}
+
+function resetLive2dLipSync() {
+  stopLipSyncLoop()
+
+  try {
+    lipSyncNode.value?.disconnect()
+  }
+  catch {
+
+  }
+
+  lipSyncNode.value = undefined
+  live2dLipSync.value = undefined
+  lipSyncStarted.value = false
+}
+
+function syncLipSyncLoop() {
+  if (shouldRunLive2dLipSyncLoop({
+    stageModelRenderer: stageModelRenderer.value,
+    paused: Boolean(props.paused),
+  }) && lipSyncStarted.value) {
+    startLipSyncLoop()
+    return
+  }
+
+  stopLipSyncLoop()
+}
+
 async function setupLipSync() {
+  if (stageModelRenderer.value !== 'live2d') {
+    resetLive2dLipSync()
+    return
+  }
+
   if (lipSyncStarted.value)
     return
 
@@ -890,11 +941,11 @@ async function setupLipSync() {
     live2dLipSync.value = lipSync
     lipSyncNode.value = lipSync.node
     await audioContext.resume()
-    startLipSyncLoop()
     lipSyncStarted.value = true
+    syncLipSyncLoop()
   }
   catch (error) {
-    lipSyncStarted.value = false
+    resetLive2dLipSync()
     console.error('Failed to setup Live2D lip sync', error)
   }
 }
@@ -1062,11 +1113,14 @@ chatHookCleanups.push(onBridgePermissionRequest(async (_permission) => {
   triggerLargeMotion(Emotion.Awkward, 2000)
 }))
 
+<<<<<<< HEAD
 onUnmounted(() => {
   lipSyncStarted.value = false
   clearStageActionTimer()
 })
 
+=======
+>>>>>>> origin/main
 // Resume audio context on first user interaction (browser requirement)
 let audioContextResumed = false
 function resumeAudioContextOnInteraction() {
@@ -1087,12 +1141,25 @@ if (typeof window !== 'undefined') {
 }
 
 onMounted(async () => {
+<<<<<<< HEAD
   if (commandOnlyMotionMode) {
     live2dIdleAnimationEnabled.value = false
   }
   db.value = drizzle({ connection: { bundles: getImportUrlBundles() } })
   await db.value.execute(`CREATE TABLE memory_test (vec FLOAT[768]);`)
+=======
+  await getDb() // stub for future update
+>>>>>>> origin/main
 })
+
+watch([stageModelRenderer, () => props.paused], ([renderer]) => {
+  if (renderer !== 'live2d') {
+    resetLive2dLipSync()
+    return
+  }
+
+  syncLipSyncLoop()
+}, { immediate: true })
 
 function canvasElement() {
   if (stageModelRenderer.value === 'live2d')
@@ -1110,6 +1177,7 @@ function readRenderTargetRegionAtClientPoint(clientX: number, clientY: number, r
 }
 
 onUnmounted(() => {
+<<<<<<< HEAD
   clearForceMotionTimer()
   stopDebugMotionScan()
   stopDebugPulse()
@@ -1130,6 +1198,9 @@ onUnmounted(() => {
     lipSyncLoopId.value = undefined
   }
 
+=======
+  resetLive2dLipSync()
+>>>>>>> origin/main
   chatHookCleanups.forEach(dispose => dispose?.())
   viewUpdateCleanups.forEach(dispose => dispose?.())
 })
@@ -1141,6 +1212,7 @@ defineExpose({
 </script>
 
 <template>
+<<<<<<< HEAD
   <div relative>
     <div v-if="live2dDebugControlsEnabled" bg="black/45" absolute left-3 top-3 z-60 flex flex-wrap gap-2 rounded-lg p-2 backdrop-blur>
       <div v-if="lastEmotionTriggerLabel" rounded-md border="1 white/20" px-2 py-1 text-xs text="white/80">
@@ -1170,6 +1242,9 @@ defineExpose({
         pulse
       </button>
     </div>
+=======
+  <div relative h-full w-full>
+>>>>>>> origin/main
     <div h-full w-full>
       <Live2DScene
         v-if="stageModelRenderer === 'live2d' && showStage"
@@ -1191,16 +1266,18 @@ defineExpose({
         :live2d-idle-animation-enabled="live2dIdleAnimationEnabled"
         :live2d-auto-blink-enabled="live2dAutoBlinkEnabled"
         :live2d-force-auto-blink-enabled="live2dForceAutoBlinkEnabled"
+        :live2d-expression-enabled="live2dExpressionEnabled"
         :live2d-shadow-enabled="live2dShadowEnabled"
         :live2d-max-fps="live2dMaxFps"
+        :live2d-render-scale="live2dRenderScale"
       />
       <ThreeScene
         v-if="stageModelRenderer === 'vrm' && showStage"
         ref="vrmViewerRef"
         v-model:state="componentState"
+        min-w="50% <lg:full" min-h="100 sm:100" h-full w-full flex-1
         :model-src="stageModelSelectedUrl"
         :idle-animation="animations.idleLoop.toString()"
-        min-w="50% <lg:full" min-h="100 sm:100" h-full w-full flex-1
         :paused="paused"
         :show-axes="stageViewControlsEnabled"
         :current-audio-source="currentAudioSource"

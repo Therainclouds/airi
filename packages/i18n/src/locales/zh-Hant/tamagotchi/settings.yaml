@@ -25,7 +25,7 @@ pages:
       sections:
         section:
           use-window-mouse:
-            title: useWindowMouse 工具
+            title: 使用視窗滑鼠工具
             description: 測試 Electron 視窗滑鼠游標位置
 devtools:
   title: 開發者
@@ -40,6 +40,8 @@ devtools:
     markdown-stress:
       title: Markdown Stress
       description: 使用大量聊天負載來進行 Markdown 解析與渲染的壓力測試
+    io-tracer:
+      title: IO Tracer
     widgets-calling:
       title: 小工具調用
 screen-capture:

@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import type { ToolMessage } from '@xsai/shared-chat'
 
 import type { ChatStreamEventContext, StreamingAssistantMessage } from '../../types/chat'
@@ -264,3 +265,6 @@ export function createChatHooks(): ChatHookRegistry {
     clearHooks,
   }
 }
+=======
+export { type ChatHookRegistry, createChatHooks } from '@proj-airi/core-agent'
+>>>>>>> origin/main

@@ -1,8 +1,35 @@
 <script setup lang="ts">
+import { Select } from '@proj-airi/ui'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
 import Alert from '../misc/alert.vue'
 import VoiceCard from './voice-card.vue'
+
+const props = withDefaults(defineProps<Props>(), {
+  columns: 2,
+  searchable: true,
+  filterableByLanguage: false,
+  languageFilterPlaceholder: 'Filter by language',
+  languageFilterAllLabel: 'All languages',
+  searchPlaceholder: 'Search voices...',
+  searchNoResultsTitle: 'No voices found',
+  searchNoResultsDescription: 'Try a different search term',
+  searchResultsText: '{count} of {total} voices',
+  unsupportedVoiceWarningTitle: 'No voices',
+  unsupportedVoiceWarningContent: 'Try a different model or provider. We are working on supporting all the voice for this model as quickly as possible. If you need it urgently, please let us know on GitHub.',
+  customInputPlaceholder: 'Enter custom voice name',
+  expandButtonText: 'Show more',
+  collapseButtonText: 'Show less',
+  playButtonText: 'Play sample',
+  pauseButtonText: 'Pause',
+  showVisualizer: true,
+  listClass: '',
+})
+
+// NOTICE: reka-ui's SelectItem rejects empty-string values (they represent
+// "no value" in Radix primitives). Use a sentinel for the "All languages"
+// option and map back to '' externally.
+const ALL_LANGUAGES_SENTINEL = '__all__'
 
 interface VoiceLanguage {
   name: string
@@ -29,7 +56,11 @@ interface Voice {
 
 interface Props {
   voices: Voice[]
+  columns?: number
   searchable?: boolean
+  filterableByLanguage?: boolean
+  languageFilterPlaceholder?: string
+  languageFilterAllLabel?: string
   searchPlaceholder?: string
   searchNoResultsTitle?: string
   searchNoResultsDescription?: string
@@ -44,23 +75,6 @@ interface Props {
   showVisualizer?: boolean
   listClass?: string
 }
-
-const props = withDefaults(defineProps<Props>(), {
-  searchable: true,
-  searchPlaceholder: 'Search voices...',
-  searchNoResultsTitle: 'No voices found',
-  searchNoResultsDescription: 'Try a different search term',
-  searchResultsText: '{count} of {total} voices',
-  unsupportedVoiceWarningTitle: 'No voices',
-  unsupportedVoiceWarningContent: 'Try a different model or provider. We are working on supporting all the voice for this model as quickly as possible. If you need it urgently, please let us know on GitHub.',
-  customInputPlaceholder: 'Enter custom voice name',
-  expandButtonText: 'Show more',
-  collapseButtonText: 'Show less',
-  playButtonText: 'Play sample',
-  pauseButtonText: 'Pause',
-  showVisualizer: true,
-  listClass: '',
-})
 
 const isListExpanded = ref(false)
 const currentlyPlayingId = ref<string>()
@@ -82,14 +96,47 @@ function initAudioContext() {
 
 const searchQuery = defineModel<string>('search-query', { required: false, default: '' })
 const voiceId = defineModel<string>('voice-id', { required: false, default: '' })
+const languageFilter = defineModel<string>('language-filter', { required: false, default: '' })
+
+// Unique language codes across voices, stable-sorted. Used to populate the
+// optional language filter selector.
+const availableLanguages = computed(() => {
+  const codes = new Set<string>()
+  for (const v of props.voices) {
+    for (const l of v.languages || []) {
+      if (l.code)
+        codes.add(l.code)
+    }
+  }
+  return Array.from(codes).sort()
+})
+
+const languageOptions = computed(() => [
+  { label: props.languageFilterAllLabel, value: ALL_LANGUAGES_SENTINEL },
+  ...availableLanguages.value.map(code => ({ label: code, value: code })),
+])
+
+const languageFilterModel = computed<string>({
+  get: () => languageFilter.value || ALL_LANGUAGES_SENTINEL,
+  set: (v) => {
+    languageFilter.value = v === ALL_LANGUAGES_SENTINEL ? '' : v
+  },
+})
+
+const languageFilteredVoices = computed(() => {
+  if (!props.filterableByLanguage || !languageFilter.value)
+    return props.voices
+  return props.voices.filter(v => (v.languages || []).some(l => l.code === languageFilter.value))
+})
 
 // Filter voices based on search query
 const filteredVoices = computed(() => {
+  const base = languageFilteredVoices.value
   if (!searchQuery.value)
-    return props.voices
+    return base
 
   const query = searchQuery.value.toLowerCase()
-  return props.voices.filter((voice) => {
+  return base.filter((voice) => {
     // Search in name and description
     const nameMatch = voice.name.toLowerCase().includes(query)
     const descMatch = voice.description && voice.description.toLowerCase().includes(query)
@@ -111,6 +158,10 @@ const filteredVoices = computed(() => {
   })
 })
 
+const showExpandCollapseBtn = computed(() => {
+  return filteredVoices.value.length > props.columns
+})
+
 // Get preview URL from either field
 function getPreviewUrl(voice: Voice): string | undefined {
   return voice.previewURL || voice.preview_audio_url
@@ -127,7 +178,14 @@ function getAudioElement(voice: Voice): HTMLAudioElement | null {
   }
 
   const audio = new Audio(previewUrl)
-  audio.crossOrigin = 'anonymous' // This is crucial for CORS
+  // NOTICE: crossOrigin='anonymous' is only needed so Web Audio's
+  // createMediaElementSource can read samples for the visualizer. Setting it
+  // forces the browser to enforce CORS on the media fetch — if the preview
+  // host (e.g. Azure CDN) doesn't return Access-Control-Allow-Origin, the
+  // load is rejected with NotSupportedError. Skip it when the visualizer is
+  // off so plain playback works regardless of origin headers.
+  if (props.showVisualizer)
+    audio.crossOrigin = 'anonymous'
   audio.preload = 'auto' // Preload the audio
 
   audio.addEventListener('ended', () => {
@@ -303,6 +361,15 @@ const customVoiceName = ref('')
 
 <template>
   <div class="voice-preview-player">
+    <!-- Language filter -->
+    <div v-if="filterableByLanguage && availableLanguages.length > 1" class="mb-2">
+      <Select
+        v-model="languageFilterModel"
+        :options="languageOptions"
+        :placeholder="languageFilterPlaceholder"
+      />
+    </div>
+
     <!-- Search bar -->
     <div v-if="searchable" class="relative" inline-flex="~" w-full items-center>
       <div class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
@@ -341,9 +408,10 @@ const customVoiceName = ref('')
         <!-- Responsive grid container -->
         <div
           :class="[
+            'grid gap-4 mb-2',
             isListExpanded
-              ? 'grid grid-cols-1 md:grid-cols-2 gap-4'
-              : 'grid auto-cols-[min(300px,calc((100vw-5rem)/2))] grid-flow-col gap-4 overflow-x-auto scrollbar-none pb-2',
+              ? 'grid-cols-1 md:grid-cols-[repeat(var(--cols),minmax(0,1fr))] snap-y snap-proximity'
+              : 'grid-flow-col auto-cols-[calc((100%-(var(--cols)-1)*1rem)/var(--cols))] overflow-x-auto scrollbar-none snap-x snap-proximity',
             ...(props.listClass
               ? (typeof props.listClass === 'string'
                 ? [props.listClass]
@@ -355,7 +423,7 @@ const customVoiceName = ref('')
             ),
           ]"
           transition="all duration-200 ease-in-out"
-          :style="isListExpanded ? '' : 'scroll-snap-type: x mandatory;'"
+          :style="{ '--cols': props.columns }"
         >
           <!-- Not support voices warning -->
           <Alert v-if="!searchQuery && filteredVoices.length === 0" type="warning">
@@ -374,6 +442,7 @@ const customVoiceName = ref('')
             v-model:voice-id="voiceId"
             v-model:custom-voice-name="customVoiceName"
             name="voice"
+            class="snap-start"
             :voice="voice"
             :currently-playing-id="currentlyPlayingId"
             :custom-input-placeholder="customInputPlaceholder"
@@ -385,6 +454,7 @@ const customVoiceName = ref('')
 
         <!-- Expand/collapse handle -->
         <div
+          v-if="showExpandCollapseBtn"
           bg="neutral-100 dark:[rgba(0,0,0,0.3)]"
           rounded-xl
           :class="[

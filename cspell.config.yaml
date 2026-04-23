@@ -3,8 +3,10 @@ ignorePaths: []
 dictionaryDefinitions: []
 dictionaries: []
 words:
+  - 433DLLA855
   - acubismmotion
   - Aerisita
+  - aihubmix
   - airi
   - airi-vtuber
   - Alaya
@@ -15,6 +17,7 @@ words:
   - allseto
   - animejs
   - APNG
+  - APPSTORE
   - Armbruster
   - asar
   - astrojs
@@ -28,6 +31,7 @@ words:
   - baichuan
   - baiducloud
   - bailian
+  - bestmove
   - bigserial
   - bilibili
   - Bitstream
@@ -40,10 +44,12 @@ words:
   - catppuccin
   - cdylib
   - cerebras
+  - chillroundm
   - cientos
   - cjkfonts
   - clippy
   - clustr
+  - codesign
   - collectblock
   - colorjs
   - cometapi
@@ -105,6 +111,8 @@ words:
   - flexsearch
   - formkit
   - frontmatter
+  - gamelet
+  - gamelets
   - Genshin
   - giteeai
   - gltf
@@ -132,6 +140,8 @@ words:
   - injeca
   - injecta
   - intlify
+  - ITCHIO
+  - itmstransporter
   - jlumbroso
   - jszip
   - Kawaii
@@ -141,6 +151,7 @@ words:
   - kirakira
   - knip
   - kwaa
+  - Landmarker
   - lemonneko
   - lemonnekogh
   - lerp
@@ -153,6 +164,7 @@ words:
   - live2dcubismframework
   - livechat
   - Llmmarker
+  - lmstudio
   - lobehub
   - logg
   - Lorebook
@@ -175,6 +187,8 @@ words:
   - minimizable
   - minisearch
   - mkdist
+  - mobileprovision
+  - Mocap
   - modelcontextprotocol
   - modnet
   - moeru
@@ -196,6 +210,7 @@ words:
   - novita
   - nprogress
   - nsis
+  - Nunito
   - nuxi
   - nuxt
   - nuxtjs
@@ -214,6 +229,7 @@ words:
   - otelcol
   - owenthereal
   - oxlint
+  - pbxproj
   - pglite
   - pgvector
   - picklist
@@ -240,6 +256,7 @@ words:
   - rdev
   - rehype
   - reka
+  - remarkablegames
   - Replayable
   - resampler
   - RGBE
@@ -253,6 +270,7 @@ words:
   - safetensors
   - SAVEPOINT
   - Screenable
+  - sdkmanager
   - sensenova
   - serde
   - Shadcn
@@ -264,6 +282,7 @@ words:
   - sizecheck
   - smallserial
   - Sniglet
+  - softprops
   - sonarjs
   - sonner
   - specta
@@ -273,6 +292,7 @@ words:
   - ssml
   - staticlib
   - stepfun
+  - stockfish
   - sumimakito
   - supergroup
   - superjson
@@ -281,12 +301,15 @@ words:
   - tauri
   - taze
   - tempora
+  - temurin
+  - testflight
   - tinyexec
   - togetherapi
   - tolist
   - tresjs
   - Triggerable
   - tsdown
+  - ttft
   - turborepo
   - unbird
   - unbundle
@@ -296,11 +319,15 @@ words:
   - Unlisten
   - unocss
   - unplugin
+  - unref
   - unspeech
   - upterm
+  - userversion
   - valibot
   - vaul
   - velin
+  - vieval
+  - vishot
   - VITE
   - vitepress
   - vllm
@@ -323,6 +350,8 @@ words:
   - worklets
   - xast
   - xastscript
+  - xcarchive
+  - xcodeproj
   - Xenova
   - xiaolai
   - xsai

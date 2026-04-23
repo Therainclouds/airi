@@ -46,6 +46,7 @@ const {
   speechProviderError,
   ssmlEnabled,
   availableVoices,
+  selectedLanguage,
 } = storeToRefs(speechStore)
 
 const { trackProviderClick } = useAnalytics()
@@ -232,6 +233,21 @@ function updateCustomVoiceName(value: string | undefined) {
 function updateCustomModelName(value: string | undefined) {
   activeSpeechModel.value = value || ''
 }
+
+function handleDeleteProvider(providerId: string) {
+  if (providerId === 'speech-noop') {
+    return
+  }
+
+  if (activeSpeechProvider.value === providerId) {
+    activeSpeechProvider.value = 'speech-noop'
+    activeSpeechModel.value = ''
+    activeSpeechVoiceId.value = ''
+    activeSpeechVoice.value = undefined
+  }
+
+  providersStore.deleteProvider(providerId)
+}
 </script>
 
 <template>
@@ -262,7 +278,18 @@ function updateCustomModelName(value: string | undefined) {
                 :title="metadata.localizedName || 'Unknown'"
                 :description="metadata.localizedDescription"
                 @click="trackProviderClick(metadata.id, 'speech')"
-              />
+              >
+                <template #topRight>
+                  <button
+                    v-if="metadata.id !== 'speech-noop' && !metadata.id.startsWith('official-provider')"
+                    type="button"
+                    class="rounded bg-neutral-100 p-1 text-neutral-600 transition-colors dark:bg-neutral-800/60 hover:bg-neutral-200 dark:text-neutral-300 dark:hover:bg-neutral-700/60"
+                    @click.stop.prevent="handleDeleteProvider(metadata.id)"
+                  >
+                    <div i-solar:trash-bin-trash-bold-duotone class="text-base" />
+                  </button>
+                </template>
+              </RadioCardSimple>
               <RouterLink
                 to="/settings/providers#speech"
                 border="2px solid"
@@ -297,14 +324,15 @@ function updateCustomModelName(value: string | undefined) {
         </div>
         <div>
           <!-- Model selection section -->
-          <div v-if="activeSpeechProvider">
+          <div v-if="activeSpeechProvider && activeSpeechProvider !== 'speech-noop'">
             <div flex="~ col gap-4">
               <div>
                 <h2 class="text-lg md:text-2xl">
                   {{ t('settings.pages.modules.consciousness.sections.section.provider-model-selection.title') }}
                 </h2>
-                <div text="neutral-400 dark:neutral-400">
+                <div class="flex flex-col items-start gap-1 text-neutral-400 md:flex-row md:items-center md:justify-between dark:text-neutral-400">
                   <span>{{ t('settings.pages.modules.consciousness.sections.section.provider-model-selection.subtitle') }}</span>
+                  <span v-if="activeSpeechModel" class="text-sm text-neutral-400 font-medium dark:text-neutral-400">{{ t('settings.pages.modules.consciousness.sections.section.provider-model-selection.current_model_label') }} {{ activeSpeechModel }}</span>
                 </div>
               </div>
 
@@ -379,6 +407,7 @@ function updateCustomModelName(value: string | undefined) {
                     :custom-input-placeholder="t('settings.pages.modules.consciousness.sections.section.provider-model-selection.custom_model_placeholder')"
                     :expand-button-text="t('settings.pages.modules.consciousness.sections.section.provider-model-selection.expand')"
                     :collapse-button-text="t('settings.pages.modules.consciousness.sections.section.provider-model-selection.collapse')"
+                    expanded-class="mb-12"
                     @update:custom-value="updateCustomModelName"
                   />
                 </template>
@@ -389,7 +418,7 @@ function updateCustomModelName(value: string | undefined) {
       </div>
 
       <!-- Voice Configuration Section -->
-      <div v-if="activeSpeechProvider">
+      <div v-if="activeSpeechProvider && activeSpeechProvider !== 'speech-noop'">
         <div flex="~ col gap-4">
           <div>
             <h2 class="text-lg text-neutral-500 md:text-2xl dark:text-neutral-400">
@@ -432,6 +461,8 @@ function updateCustomModelName(value: string | undefined) {
             <VoiceCardManySelect
               v-model:search-query="voiceSearchQuery"
               v-model:voice-id="activeSpeechVoiceId"
+              v-model:language-filter="selectedLanguage"
+              :show-visualizer="false"
               :voices="availableVoices[activeSpeechProvider]?.filter(voice => {
                 // If no model is selected, show all voices
                 if (!activeSpeechModel) {
@@ -439,14 +470,30 @@ function updateCustomModelName(value: string | undefined) {
                 }
                 // If a model is selected, filter by compatibility
                 return !voice.compatibleModels || voice.compatibleModels.includes(activeSpeechModel)
-              }).map(voice => ({
-                id: voice.id,
-                name: voice.name,
-                description: voice.description,
-                previewURL: voice.previewURL,
-                customizable: false,
-              }))"
+              }).map(voice => {
+                // Promote the voice's own-language display name (e.g. 晓甄, なのみ)
+                // to the card title when it actually differs from the romanized
+                // fallback. Upstreams put this name in languages[].title keyed by
+                // locale code; pick the entry matching the currently-filtered
+                // language so multilingual voices resolve correctly.
+                const localized = (voice.languages || []).find(l => l.code === selectedLanguage)
+                const displayName = localized && localized.title && localized.title !== voice.name
+                  ? localized.title
+                  : voice.name
+                return {
+                  id: voice.id,
+                  name: displayName,
+                  description: voice.description,
+                  previewURL: voice.previewURL,
+                  customizable: false,
+                  // Show plain locale codes in the tag row; the localized name
+                  // that used to surface here is now the card title.
+                  languages: (voice.languages || []).map(l => ({ name: l.code, code: l.code })),
+                  labels: voice.gender ? { gender: voice.gender } : undefined,
+                }
+              })"
               :searchable="true"
+              :filterable-by-language="true"
               :search-placeholder="t('settings.pages.modules.speech.sections.section.provider-voice-selection.search_voices_placeholder')"
               :search-no-results-title="t('settings.pages.modules.speech.sections.section.provider-voice-selection.no_voices')"
               :search-no-results-description="t('settings.pages.modules.speech.sections.section.provider-voice-selection.no_voices_description')"

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+<<<<<<< HEAD
 import { all } from '@proj-airi/i18n'
 import { useSpeechStore } from '@proj-airi/stage-ui/stores/modules/speech'
 import { useSettings } from '@proj-airi/stage-ui/stores/settings'
@@ -97,6 +98,13 @@ const languages = computed(() => {
       <div text="60" i-solar:emoji-funny-square-bold-duotone />
     </div>
   </div>
+=======
+import SettingsGeneralFields from '../../../components/settings-general-fields.vue'
+</script>
+
+<template>
+  <SettingsGeneralFields />
+>>>>>>> origin/main
 </template>
 
 <route lang="yaml">

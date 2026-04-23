@@ -1,5 +1,5 @@
 allow-visible-on-all-workspaces:
-  title: 교차 공간 가시성
+  title: 모든 작업 공간에 표시
   description: 모든 작업 공간에 창을 볼 수 있도록 합니다. macOS 전용 기능입니다.
 pages:
   modules:
@@ -40,6 +40,8 @@ devtools:
     markdown-stress:
       title: 마크다운 스트레스
       description: 스트레스 마크다운 구문 분석 및 대량 채팅 페이로드 렌더링
+    io-tracer:
+      title: IO Tracer
     widgets-calling:
       title: 위젯 호출
 screen-capture:

@@ -1,0 +1,93 @@
+chat:
+  message:
+    character-name:
+      airi: Xclaw
+      core-system: Core System
+      you: You
+  reasoning: Reasoning
+attachments:
+  action: Add image or file
+  bridgeOnly: Your current provider only supports image-based vision input. Switch to LobsterAI / OpenClaw Bridge before attaching regular files.
+  capabilityHint: Image vision input is enabled
+  capabilityHintBridge: Image and file multimodal input is enabled
+  readFailed: Failed to read the selected file. Please try again.
+  tooLargeFile: Files must be smaller than {size} MB.
+  tooLargeImage: Images must be smaller than {size} MB.
+  tooMany: You can attach up to {count} items at a time.
+  unsupportedType: Only PNG, JPG, WEBP, GIF, PDF, TXT, MD, CSV, and JSON files are supported right now.
+camera:
+  autoGreetingFallback: I can see you now. It is nice to meet you—let us start chatting.
+  autoCaptureHint: When enabled, the latest pending frame is refreshed at a low frequency while preview stays active.
+  autoCaptureOff: Low-frequency auto capture is off
+  autoCaptureOn: Low-frequency auto capture is on
+  autoSendingIn: Auto-sending in {seconds}s
+  capture: Capture current frame
+  captureFailed: Failed to capture the current frame. Please try again.
+  capturing: Capturing frame
+  close: Close camera panel
+  debugPanelTitle: Vision Control Panel
+  device: Camera device
+  deviceFallback: Camera
+  draftReady: A pending camera frame is ready to send
+  errors:
+    cameraUnavailable: The camera is not available right now. Check the device and permissions, then try again.
+    deviceBusy: The camera is currently being used by another app.
+    deviceNotFound: No available camera was detected.
+    deviceUnavailable: The selected camera is temporarily unavailable. Try another device.
+    permissionDenied: Camera permission was denied. Please allow access first.
+  expand: Expand to control panel
+  idle: Camera ready to start
+  minimize: Minimize to status card
+  multiDeviceHint: Detected {count} camera devices.
+  open: Open camera panel
+  pause: Pause auto capture
+  permissionDenied: Camera permission denied
+  previewing: Camera preview is active
+  privacyHint: The captured frame is only sent to the model after you explicitly send the message.
+  processing: Processing...
+  ready: Ready
+  requestingPermission: Requesting camera permission
+  sendHint: Preview only runs while this page stays visible.
+  sending: Sending
+  speechAttachHint: When enabled, direct speech sending attaches the latest camera snapshot when available.
+  speechAttachOff: Speech-linked vision is off
+  speechAttachOn: Speech-linked vision is on
+  start: Start preview
+  startFailed: Failed to start camera preview. Check permissions and device status.
+  stop: Stop preview
+  title: Camera frame vision
+  tooLarge: The captured frame is too large. Move the camera closer and try again.
+  unsupported: Camera frame capture is not supported in this environment.
+  waiting: Waiting for frame
+  willCaptureSoon: A new frame will be captured soon
+message: Say something...
+microphone:
+  autoSendOff: Recognition results stay in the input box until you send them
+  autoSendReady: Recognized speech is sent automatically
+  permissionDenied: Microphone permission was denied. Please allow access and try again.
+  startFailed: Failed to start speech recognition. Please check your microphone and transcription settings.
+operations:
+  load-models: Load Models
+  load-models-status:
+    loading: Loading
+    ready: Ready
+select-a-audio-input: Select a Audio Input
+select-a-model: Select a model
+select-a-voice: Choose a voice
+viewers:
+  debug-menu:
+    emotions: Emotions
+    emotions-btn:
+      angry: 😠 Angry
+      awkward: 😳 Awkward
+      happy: 😄 Happy
+      neutral: 🙂 Neutral
+      question: 🤔 Question
+      sad: 😫 Sad
+      surprised: 🤯 Surprised
+      think: 🤨 Think
+    vrm:
+      camera: Camera
+      model:
+        title: Model
+waiting: Waiting
