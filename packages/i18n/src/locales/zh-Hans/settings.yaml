@@ -9,7 +9,7 @@ animations:
     title: 是否使用页面特定过场动画
 dialogs:
   onboarding:
-    title: 欢迎来到 AIRI！
+    title: 欢迎来到 Xclaw！
     description: 让我们设置您的第一个服务来源来开始使用。
     selectProvider: 选择服务来源
     configureProvider: 配置 {provider}
@@ -80,8 +80,19 @@ dialogs:
     last-submitted-preview: 提交前预览
 language:
   title: 语言
+<<<<<<< HEAD
+  description: >
+    切换显示界面的语言
+hearing:
+  title: 听觉
+  description: 语音识别
+narration:
+  title: 朗诵回复
+  description: 开启后将朗读 Xclaw 的回复
+=======
   description: |
     界面语言。你也可以稍后再设置角色语言。
+>>>>>>> origin/main
 controls-island:
   icon-size:
     title: 控制岛图标大小
@@ -170,7 +181,7 @@ pages:
     delete: 删除
     delete_card: 删除角色卡
     delete_confirmation: 确定要删除这张角色卡吗？
-    description: 使用 AIRI 角色卡预设
+    description: 使用 Xclaw 角色卡预设
     description_label: 描述
     drop_here: 放开以上传文件
     create_card: 创建新角色卡
@@ -191,8 +202,14 @@ pages:
         scenario: 你最近醒来，忘记了之前的所有生活。
         systemprompt: 你将收到消息，请像真实人类一样回复。
         posthistoryinstructions: 记得模仿人类的行为。
+<<<<<<< HEAD
+      openclawprompt_notice: 使用 LobsterAI 或 OpenClaw Bridge 时，请在这里维护专用提示词。这样可以避免继续转发 Airi 原生提示词。
+      openclawprompt_required_notice: 当前聊天提供商会走 Bridge 链路，保存前必须填写 OpenClaw 提示词。
+      modules_info: 为此角色卡配置模块。如未设置，将使用默认模块配置。
+=======
       modules_info: >-
         为此角色卡配置模块。如未设置，将使用默认模块配置。
+>>>>>>> origin/main
       use_default: 使用默认
       use_default_not_configured: 使用默认（未配置）
       fields_info:
@@ -209,6 +226,7 @@ pages:
         greetings: 您的角色应该如何说“你好”？
         systemprompt: 在这里向 AI LLM 解释当被提示时应该如何回应。
         posthistoryinstructions: 在消息历史之后，放入 AI LLM 应该阅读的内容。
+        openclawprompt: 供 LobsterAI / OpenClaw Bridge 使用的专用提示词。使用 openclaw-agent 或 lobster-agent 时，应优先维护这里，而不是继续转发 Airi 的原生系统提示词。
         version: >-
           卡片版本，如果您从之前的卡片做了更改，应当增加此版本号。
         consciousness_model: 为这个角色选择 AI 模型。
@@ -221,6 +239,7 @@ pages:
         scenario: '错误：必须提供一个情境。'
         systemprompt: '错误：请提供系统提示。'
         posthistoryinstructions: '错误：必须提供消息历史后的提示。'
+        openclawprompt: '错误：当前 Bridge 提供商要求配置 OpenClaw 提示词。'
     modules: 模块
     name_asc: 名称 (A-Z)
     name_desc: 名称 (Z-A)
@@ -228,6 +247,8 @@ pages:
     no_results: 没有找到匹配的角色卡
     personality: 性格
     posthistoryinstructions: 历史提示指令
+    openclawprompt: OpenClaw 提示词
+    openclawprompt_required_runtime: 当前角色卡未配置 OpenClaw 提示词。请先到角色卡设置中填写后，再使用 LobsterAI / OpenClaw Bridge 发送消息。
     recent: 最近添加
     scenario: 场景
     search: 搜索角色卡...
@@ -238,7 +259,7 @@ pages:
       model: 声音 / 模型
       voice: 声音 / 声线
     systemprompt: 系统提示词
-    title: AIRI 角色卡
+    title: Xclaw 角色卡
     try_different_search: 尝试使用其他关键词搜索
     upload: 上传
     upload_desc: 点击或拖拽文件到此处上传
@@ -247,7 +268,7 @@ pages:
     title: 记忆体
   data:
     title: Data
-    description: 管理存储 AIRI 数据、导出和重置
+    description: 管理存储 Xclaw 数据、导出和重置
     sections:
       chats:
         title: 聊天会话
@@ -280,7 +301,7 @@ pages:
         open: 打开文件夹
       desktop:
         title: 重置桌面设置和状态
-        description: 清除 AIRI 桌面设置和运行状态。
+        description: 清除 Xclaw 桌面设置和运行状态。
         reset: 重置桌面数据
     confirmations:
       tooltip: 您确定吗？
@@ -390,7 +411,7 @@ pages:
       description: 一起玩 Factorio！
       title: 异星工厂 Factorio
       enable: 启用异星工厂集成
-      enable-description: 允许AIRI与异星工厂游戏互动
+      enable-description: 允许Xclaw与异星工厂游戏互动
       server-address: 服务器地址
       server-address-description: 异星工厂服务器的IP地址或主机名
       server-address-placeholder: 输入服务器地址（例如：localhost或192.168.1.100）
@@ -404,8 +425,20 @@ pages:
       description: 一起玩 Minecraft！
       title: 我的世界 Minecraft
       enable: 启用我的世界集成
+<<<<<<< HEAD
+      enable-description: 允许Xclaw与我的世界游戏互动
+      server-address: 服务器地址
+      server-address-description: 我的世界服务器的IP地址或主机名
+      server-address-placeholder: 输入服务器地址（例如：localhost或play.example.com）
+      server-port: 服务器端口
+      server-port-description: 我的世界服务器的端口号（默认 25565）
+      username: 用户名
+      username-description: 您在我的世界服务器中的用户名
+      username-placeholder: 输入您的我的世界用户名
+=======
       enable-description: >-
         在 Chat 界面 中包含 Minecraft 自己的上下文和认知，并保持 Passive runtime visibility 启用。
+>>>>>>> origin/main
       configured: 我的世界已正确配置！
       read-only:
         title: 只读外壳
@@ -457,7 +490,7 @@ pages:
       description: Discord 发消息和语音聊天
       title: Discord
       enable: 启用Discord集成
-      enable-description: 允许AIRI通过Discord进行互动
+      enable-description: 允许Xclaw通过Discord进行互动
       token: 机器人令牌
       token-description: 您的Discord机器人令牌
       token-placeholder: 输入您的Discord机器人令牌
@@ -497,6 +530,9 @@ pages:
           voice-settings:
             input-ssml:
               placeholder: 请输入 SSML 文本
+            narration:
+              label: 朗诵回复
+              description: 朗读回复同时保留字幕与嘴型动作
             use-ssml:
               description: 启用后可以输入原始 SSML 而不是纯文本
               label: 选用自定义 SSML
@@ -509,7 +545,7 @@ pages:
       description: X / Twitter 的浏览和使用
       title: X / Twitter
       enable: 启用X / Twitter集成
-      enable-description: 允许AIRI与X / Twitter互动
+      enable-description: 允许Xclaw与X / Twitter互动
       api-key: API密钥
       api-key-description: 您的X / Twitter API密钥
       api-key-placeholder: 输入您的X / Twitter API密钥
@@ -572,7 +608,7 @@ pages:
     helpinfo:
       title: 第一次使用？
       description: >
-        AIRI 需要配置至少一个 {chat} 服务来源，才能正常思考和运作。你可以把它看作是 AIRI 系统中角色的大脑。
+        Xclaw 需要配置至少一个 {chat} 服务来源，才能正常思考和运作。你可以把它看作是 Xclaw 系统中角色的大脑。
     catalog:
       edit:
         config-id-not-found: 未找到服务来源配置。
@@ -851,9 +887,18 @@ pages:
       openai-compatible:
         description: OpenAI 兼容 API
         title: OpenAI 兼容 API
+<<<<<<< HEAD
+      openclaw-agent:
+        description: OpenClaw 本地桥接入口
+        title: OpenClaw Agent
+      lobster-agent:
+        description: LobsterAI 本地 Agent 桥接
+        title: Lobster Agent
+=======
       nvidia:
         description: build.nvidia.com
         title: NVIDIA NIM
+>>>>>>> origin/main
       n1n:
         description: n1n.ai - 高性能的 AI API 提供商
         title: n1n
@@ -937,6 +982,68 @@ pages:
       description: WebSocket 服务器的完整地址(例如，ws://localhost:6121/ws)
       label: WebSocket 服务器地址
       placeholder: ws://localhost:6121/ws
+<<<<<<< HEAD
+  skills:
+    description: 管理 Lobster 技能列表、配置和下载安装入口
+    title: 技能
+    lobster:
+      total: '总技能'
+      enabledCount: '已启用'
+      manage: '管理技能'
+      installed: '已安装技能'
+      list: '技能列表'
+      listDesc: '查看当前技能状态，启停技能，并打开配置编辑。'
+      add: '添加技能'
+      addDesc: '支持通过 Git 仓库地址、本地路径或压缩包来源下载技能；高风险技能会先进入风险确认流程。'
+      source: '技能来源'
+      sourcePlaceholder: '输入 Git 地址、本地路径或可访问的技能包来源'
+      download: '下载并检查'
+      clear: '清空'
+      config: '技能配置'
+      configDesc: '选择一个技能后即可读取并编辑它的配置。'
+      configEmpty: '当前还没有配置项'
+      configEmptyDesc: '可以先新增一条配置，再保存到该技能的本地配置中。'
+      saveConfig: '保存配置'
+      addEntry: '新增配置项'
+      reRead: '重新读取'
+      serviceAddress: '服务地址'
+      defaultKeyWarning: '当前仍在使用默认 API Key'
+      defaultKeyWarningDesc: '建议先到 Provider 设置里配置独立的 Lobster API Key，再进行技能管理或下载安装。'
+      refresh: '刷新'
+      providerSettings: 'Provider 设置'
+      filter: '筛选技能'
+      filterPlaceholder: '按名称、ID 或描述搜索'
+      noMatch: '暂无匹配技能'
+      noMatchDesc: '可以调整筛选条件，或者先从下方添加一个新的技能来源。'
+      enable: '启用'
+      disable: '停用'
+      statusEnabled: '已启用'
+      statusDisabled: '已停用'
+      builtin: '内置'
+      configure: '配置'
+      configKey: '配置键'
+      configKeyPlaceholder: '例如 API_KEY'
+      configValue: '配置值'
+      configValuePlaceholder: '输入配置值'
+      configValueSensitive: '输入敏感值'
+      show: '显示'
+      hide: '隐藏'
+      delete: '删除'
+      duplicateKeys: '检测到重复配置键'
+      noSkillSelected: '尚未选择技能'
+      noSkillSelectedDesc: '请先在左侧技能列表中点击"配置"，再在这里编辑当前技能的自定义参数。'
+      riskConfirm: '风险确认'
+      riskFindings: '条可见风险项'
+      install: '安装并启用'
+      installDisabled: '安装为禁用'
+      cancel: '取消'
+      unknown: '未知'
+      noDetails: '无详细说明'
+      permission:
+        allow: '允许'
+        deny: '拒绝'
+        tool: '工具'
+=======
     server-hostname:
       label: 是否暴露在连接的网络下（WiFi，有线）
       description: >-
@@ -976,6 +1083,7 @@ pages:
       errors:
         title: 二维码扫描失败
         failed: 扫描或连接二维码失败。
+>>>>>>> origin/main
   scene:
     description: 配置角色所在环境
     title: 场景
@@ -1054,8 +1162,8 @@ pages:
           presets:
             default:
               colors:
-                color-1: AIRI Green
-              description: 默认的绿色主题，由 AIRI 为您带来！
+                color-1: Xclaw Green
+              description: 默认的绿色主题，由 Xclaw 为您带来！
               title: 默认颜色
             morandi:
               colors:
@@ -1134,7 +1242,7 @@ sections:
 theme:
   title: 主题
   description: |
-    切换 AIRI 的基础主题，亮色模式或暗色模式。
+    切换 Xclaw 的基础主题，亮色模式或暗色模式。
 title: 设置
 voices: 声线
 vrm:

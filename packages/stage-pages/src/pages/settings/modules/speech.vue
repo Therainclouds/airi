@@ -12,6 +12,7 @@ import {
 import { useAnalytics } from '@proj-airi/stage-ui/composables'
 import { useSpeechStore } from '@proj-airi/stage-ui/stores/modules/speech'
 import { useProvidersStore } from '@proj-airi/stage-ui/stores/providers'
+import { createAudioPreviewUrl, playAudioPreview } from '@proj-airi/stage-ui/utils'
 import {
   FieldCheckbox,
   FieldInput,
@@ -35,6 +36,7 @@ const {
   activeSpeechVoice,
   activeSpeechVoiceId,
   pitch,
+  narrationEnabled,
   isLoadingSpeechProviderVoices,
   supportsModelListing,
   providerModels,
@@ -92,15 +94,13 @@ onMounted(async () => {
 })
 
 watch(activeSpeechProvider, async (newProvider, oldProvider) => {
-  await providersStore.loadModelsForConfiguredProviders()
-  await speechStore.loadVoicesForProvider(newProvider)
-
-  // Reset model and voice when switching providers (but not on initial load)
   if (oldProvider !== undefined && oldProvider !== newProvider) {
     activeSpeechModel.value = ''
     activeSpeechVoiceId.value = ''
     activeSpeechVoice.value = undefined
   }
+  await providersStore.loadModelsForConfiguredProviders()
+  await speechStore.loadVoicesForProvider(newProvider)
 
   syncOpenAICompatibleSettings()
 })
@@ -180,14 +180,8 @@ async function generateTestSpeech() {
     })
 
     // Convert the response to a blob and create an object URL
-    audioUrl.value = URL.createObjectURL(new Blob([response]))
-
-    // Play the audio
-    setTimeout(() => {
-      if (audioPlayer.value) {
-        audioPlayer.value.play()
-      }
-    }, 100)
+    audioUrl.value = createAudioPreviewUrl(response)
+    await playAudioPreview(audioPlayer.value, response, audioUrl.value)
   }
   catch (error) {
     console.error('Error generating speech:', error)
@@ -540,6 +534,11 @@ function handleDeleteProvider(providerId: string) {
 
           <!-- Voice parameters -->
           <div flex="~ col gap-4">
+            <FieldCheckbox
+              v-model="narrationEnabled"
+              :label="t('settings.pages.modules.speech.sections.section.voice-settings.narration.label')"
+              :description="t('settings.pages.modules.speech.sections.section.voice-settings.narration.description')"
+            />
             <FieldRange
               v-model="pitch"
               label="Pitch"

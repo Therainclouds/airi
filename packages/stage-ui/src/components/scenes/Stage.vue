@@ -8,9 +8,15 @@ import type { EmotionPayload } from '../../constants/emotions'
 
 import { createLive2DLipSync } from '@proj-airi/model-driver-lipsync'
 import { wlipsyncProfile } from '@proj-airi/model-driver-lipsync/shared/wlipsync'
+<<<<<<< HEAD
+import { createPlaybackManager, createSpeechPipeline, createTtsSegmentStream } from '@proj-airi/pipelines-audio'
+import { defaultModelParameters, Live2DScene, useLive2d } from '@proj-airi/stage-ui-live2d'
+import { ThreeScene, useModelStore } from '@proj-airi/stage-ui-three'
+=======
 import { createPlaybackManager, createSpeechPipeline } from '@proj-airi/pipelines-audio'
 import { Live2DScene, useLive2d } from '@proj-airi/stage-ui-live2d'
 import { ThreeScene } from '@proj-airi/stage-ui-three'
+>>>>>>> origin/main
 import { animations } from '@proj-airi/stage-ui-three/assets/vrm'
 import { createQueue } from '@proj-airi/stream-kit'
 import { useBroadcastChannel } from '@vueuse/core'
@@ -27,13 +33,14 @@ import { useDuckDb } from '../../composables/use-duck-db'
 import { useIOTraceBridge } from '../../composables/use-io-trace-bridge'
 import { initIOTracer } from '../../composables/use-io-tracer'
 import { llmInferenceEndToken } from '../../constants'
-import { EMOTION_EmotionMotionName_value, EMOTION_VRMExpressionName_value, EmotionThinkMotionName } from '../../constants/emotions'
+import { Emotion, EMOTION_EmotionMotionName_value, EMOTION_VRMExpressionName_value } from '../../constants/emotions'
 import { useAudioContext, useSpeakingStore } from '../../stores/audio'
 import { useChatOrchestratorStore } from '../../stores/chat'
 import { useAiriCardStore } from '../../stores/modules'
 import { useSpeechStore } from '../../stores/modules/speech'
 import { useProvidersStore } from '../../stores/providers'
 import { useSettings } from '../../stores/settings'
+import { useSettingsAudioDevice } from '../../stores/settings/audio-device'
 import { useSpeechRuntimeStore } from '../../stores/speech-runtime'
 import { shouldRunLive2dLipSyncLoop } from './runtime'
 
@@ -68,13 +75,18 @@ const {
   live2dExpressionEnabled,
   live2dShadowEnabled,
   live2dMaxFps,
+<<<<<<< HEAD
+  live2dDebugControlsEnabled,
+  live2dEmotionMotionMap,
+=======
   live2dRenderScale,
+>>>>>>> origin/main
 } = storeToRefs(settingsStore)
 const { mouthOpenSize } = storeToRefs(useSpeakingStore())
 const { audioContext } = useAudioContext()
 const currentAudioSource = ref<AudioBufferSourceNode>()
 
-const { onBeforeMessageComposed, onBeforeSend, onTokenLiteral, onTokenSpecial, onStreamEnd, onAssistantResponseEnd } = useChatOrchestratorStore()
+const { onBeforeMessageComposed, onBeforeSend, onTokenLiteral, onTokenSpecial, onStreamEnd, onAssistantResponseEnd, onBridgeStateChanged, onBridgePermissionRequest } = useChatOrchestratorStore()
 const chatHookCleanups: Array<() => void> = []
 // WORKAROUND: clear previous handlers on unmount to avoid duplicate calls when this component remounts.
 //             We keep per-hook disposers instead of wiping the global chat hooks to play nicely with
@@ -111,15 +123,475 @@ const nowSpeaking = ref(false)
 const lipSyncStarted = ref(false)
 const lipSyncLoopId = ref<number>()
 const live2dLipSync = ref<Live2DLipSync>()
+const stageActionState = ref<'idle' | 'listening' | 'done'>('idle')
+const stageActionTimer = ref<number>()
+const stageActionEmotionMap: Record<'listening' | 'done', EmotionPayload['name']> = {
+  listening: Emotion.Think,
+  done: Emotion.Happy,
+}
 const live2dLipSyncOptions: Live2DLipSyncOptions = { mouthUpdateIntervalMs: 50, mouthLerpWindowMs: 50 }
+const textMouthUntil = ref(0)
+const textMouthStrength = 0.7
+const textMouthWaveMs = 140
+const textMouthDurationMs = 6000
+const assistantMotionTriggered = ref(false)
+const idleHeadWaveId = ref<number>()
+const headFrozen = ref(false)
+const headFrozenAngles = ref<{ x: number, y: number, z: number }>({ x: 0, y: 0, z: 0 })
+const expressionReleaseMs = 900
+const expressionAnimationId = ref<number>()
+const expressionState = ref<{
+  base: Record<string, number>
+  target: Partial<typeof defaultModelParameters>
+  startAt: number
+  endAt: number
+} | null>(null)
 
 const { activeCard } = storeToRefs(useAiriCardStore())
 const speechStore = useSpeechStore()
-const { ssmlEnabled, activeSpeechProvider, activeSpeechModel, activeSpeechVoice, pitch } = storeToRefs(speechStore)
+const { ssmlEnabled, activeSpeechProvider, activeSpeechModel, activeSpeechVoice, pitch, narrationEnabled } = storeToRefs(speechStore)
 const activeCardId = computed(() => activeCard.value?.name ?? 'default')
 const speechRuntimeStore = useSpeechRuntimeStore()
+const audioDeviceStore = useSettingsAudioDevice()
+const { enabled: audioDeviceEnabled } = storeToRefs(audioDeviceStore)
 
-const { currentMotion } = storeToRefs(useLive2d())
+const { currentMotion, availableMotions, motionMap, modelParameters, motionLockEnabled } = storeToRefs(useLive2d())
+const motionLockReasons = ref(new Set<string>())
+const emotionMotionCursor = ref<Record<string, number>>({})
+const forceMotionTimer = ref<number>()
+const cachedIdleAnimationEnabled = ref<boolean>()
+const commandOnlyMotionMode = true
+const debugEmotionButtons: EmotionPayload['name'][] = [Emotion.Happy, Emotion.Sad, Emotion.Angry, Emotion.Think, Emotion.Surprise]
+const debugMotionScanTimer = ref<number>()
+const debugPulseAnimationId = ref<number>()
+const lastEmotionTrigger = ref<{ source: 'button' | 'act' | 'scan' | 'pulse', name?: EmotionPayload['name'], timestamp: number } | null>(null)
+const lastEmotionTriggerLabel = computed(() => {
+  if (!lastEmotionTrigger.value)
+    return ''
+  return lastEmotionTrigger.value.name
+    ? `${lastEmotionTrigger.value.source}:${lastEmotionTrigger.value.name}`
+    : lastEmotionTrigger.value.source
+})
+
+const EMOTION_CHOREOGRAPHY_PLAN: Record<EmotionPayload['name'], string[][]> = {
+  happy: [['happy', 'smile', 'joy', 'laugh'], ['greet', 'wave', 'dance', 'special']],
+  sad: [['sad', 'cry', 'tears', 'down'], ['idle', 'slow', 'low', 'breathe']],
+  angry: [['angry', 'mad', 'rage', 'fury'], ['shake', 'fast', 'hit', 'tap']],
+  think: [['think', 'thinking', 'ponder', 'consider'], ['idle', 'focus', 'look', 'head']],
+  surprised: [['surprise', 'shocked', 'wow'], ['jump', 'quick', 'special', 'look']],
+  awkward: [['awkward', 'embarrass', 'shy'], ['idle', 'small', 'look', 'aside']],
+  question: [['question', '疑', '问', 'confuse'], ['tilt', 'head', 'look', 'focus']],
+  curious: [['curious', 'interest', 'wonder'], ['look', 'focus', 'turn', 'head']],
+  neutral: [['idle', 'neutral', 'normal'], ['base', 'stand', 'loop', 'default']],
+}
+const STRONG_MOTION_KEYWORD_WEIGHTS: Array<{ keyword: string, weight: number }> = [
+  { keyword: 'attack', weight: 5 },
+  { keyword: 'punch', weight: 5 },
+  { keyword: 'kick', weight: 5 },
+  { keyword: 'throw', weight: 4 },
+  { keyword: 'hit', weight: 4 },
+  { keyword: 'shake', weight: 4 },
+  { keyword: 'spin', weight: 4 },
+  { keyword: 'jump', weight: 4 },
+  { keyword: 'dance', weight: 4 },
+  { keyword: 'wave', weight: 3 },
+  { keyword: 'fast', weight: 3 },
+  { keyword: 'special', weight: 3 },
+  { keyword: 'run', weight: 3 },
+  { keyword: 'power', weight: 2 },
+  { keyword: 'big', weight: 2 },
+]
+
+function toMotionSearchText(motion: { motionName: string, fileName: string }): string {
+  return `${motion.motionName} ${motion.fileName}`.toLowerCase()
+}
+
+function pickMotionByKeywords(emotionName: EmotionPayload['name']) {
+  const rounds = EMOTION_CHOREOGRAPHY_PLAN[emotionName] ?? []
+  for (const keywords of rounds) {
+    const matched = availableMotions.value.filter((motion) => {
+      const source = toMotionSearchText(motion)
+      return keywords.some(keyword => source.includes(keyword.toLowerCase()))
+    })
+    if (matched.length > 0)
+      return matched
+  }
+  return []
+}
+
+function scoreStrongMotion(motion: { motionName: string, fileName: string }) {
+  const source = toMotionSearchText(motion)
+  let score = 0
+  for (const { keyword, weight } of STRONG_MOTION_KEYWORD_WEIGHTS) {
+    if (source.includes(keyword))
+      score += weight
+  }
+  if (!source.includes('idle'))
+    score += 1
+  return score
+}
+
+function pickStrongMotions() {
+  const scored = availableMotions.value
+    .map(motion => ({ motion, score: scoreStrongMotion(motion) }))
+    .filter(item => item.score > 0)
+  scored.sort((a, b) => b.score - a.score)
+  return scored.map(item => item.motion)
+}
+
+function pickMotionBySettings(emotionName: EmotionPayload['name']) {
+  const configured = live2dEmotionMotionMap.value?.[emotionName] ?? []
+  if (configured.length === 0)
+    return []
+  const availableByFile = new Map(availableMotions.value.map(motion => [motion.fileName, motion]))
+  const fallbackList = availableMotions.value
+  return configured
+    .map(item => availableByFile.get(item.fileName) || fallbackList.find(motion => motion.motionName === item.motionName && motion.motionIndex === item.motionIndex))
+    .filter((motion): motion is { motionName: string, motionIndex: number, fileName: string } => motion != null)
+}
+
+function resolveLive2DMotion(emotionName: EmotionPayload['name']) {
+  const configuredCandidates = pickMotionBySettings(emotionName)
+  const strongCandidates = pickStrongMotions()
+  const plannedCandidates = pickMotionByKeywords(emotionName)
+  const mappedCandidates = availableMotions.value
+    .filter(motion => motionMap.value[motion.fileName] === emotionName)
+  const thinkCandidates = availableMotions.value
+    .filter((motion) => {
+      const source = toMotionSearchText(motion)
+      return source.includes('think')
+    })
+  const nonIdleCandidates = availableMotions.value.filter((motion) => {
+    const source = toMotionSearchText(motion)
+    return !source.includes('idle')
+  })
+  const fallbackCandidates = nonIdleCandidates.length > 0 ? nonIdleCandidates : availableMotions.value
+  const motionCandidates = configuredCandidates.length > 0
+    ? configuredCandidates
+    : strongCandidates.length > 0
+      ? strongCandidates
+      : plannedCandidates.length > 0
+        ? plannedCandidates
+        : mappedCandidates.length > 0
+          ? mappedCandidates
+          : thinkCandidates.length > 0
+            ? thinkCandidates
+            : fallbackCandidates
+
+  if (motionCandidates.length > 0) {
+    const cursor = emotionMotionCursor.value[emotionName] ?? 0
+    const selected = motionCandidates[cursor % motionCandidates.length]
+    emotionMotionCursor.value[emotionName] = cursor + 1
+    return { group: selected.motionName, index: selected.motionIndex }
+  }
+
+  if (!commandOnlyMotionMode) {
+    return { group: EMOTION_EmotionMotionName_value[emotionName] }
+  }
+  return null
+}
+
+function clearForceMotionTimer() {
+  if (forceMotionTimer.value) {
+    clearTimeout(forceMotionTimer.value)
+    forceMotionTimer.value = undefined
+  }
+}
+
+function enableMotionLock(reason: string) {
+  const next = new Set(motionLockReasons.value)
+  next.add(reason)
+  motionLockReasons.value = next
+  motionLockEnabled.value = next.size > 0
+}
+
+function disableMotionLock(reason: string) {
+  const next = new Set(motionLockReasons.value)
+  next.delete(reason)
+  motionLockReasons.value = next
+  motionLockEnabled.value = next.size > 0
+}
+
+function applyLive2DMotionByEmotion(emotion: EmotionPayload) {
+  const nextMotion = resolveLive2DMotion(emotion.name)
+  if (nextMotion) {
+    currentMotion.value = nextMotion
+  }
+  if (emotion.force !== true && !emotion.params)
+    return
+
+  clearForceMotionTimer()
+  if (cachedIdleAnimationEnabled.value === undefined) {
+    cachedIdleAnimationEnabled.value = live2dIdleAnimationEnabled.value
+  }
+  live2dIdleAnimationEnabled.value = false
+  enableMotionLock('force-motion')
+  const holdMs = emotion.holdMs ?? 1800
+  const targetExpression = {
+    ...expressionTargetsForEmotion(emotion.name),
+    ...emotion.params,
+  }
+  setExpression(targetExpression, holdMs)
+  forceMotionTimer.value = window.setTimeout(() => {
+    live2dIdleAnimationEnabled.value = commandOnlyMotionMode
+      ? false
+      : (cachedIdleAnimationEnabled.value ?? true)
+    cachedIdleAnimationEnabled.value = undefined
+    disableMotionLock('force-motion')
+    forceMotionTimer.value = undefined
+  }, holdMs)
+}
+
+function triggerDebugEmotion(name: EmotionPayload['name']) {
+  lastEmotionTrigger.value = { source: 'button', name, timestamp: Date.now() }
+  emotionsQueue.enqueue({
+    name,
+    intensity: 1,
+    force: true,
+    holdMs: 3000,
+  })
+}
+
+function stopDebugMotionScan() {
+  if (debugMotionScanTimer.value) {
+    clearInterval(debugMotionScanTimer.value)
+    debugMotionScanTimer.value = undefined
+  }
+}
+
+function stopDebugPulse() {
+  if (debugPulseAnimationId.value) {
+    cancelAnimationFrame(debugPulseAnimationId.value)
+    debugPulseAnimationId.value = undefined
+  }
+}
+
+function clearStageActionTimer() {
+  if (stageActionTimer.value) {
+    clearTimeout(stageActionTimer.value)
+    stageActionTimer.value = undefined
+  }
+}
+
+function applyStageActionState(next: 'idle' | 'listening' | 'done', holdMs = 1600) {
+  clearStageActionTimer()
+  stageActionState.value = next
+  if (next === 'idle') {
+    startIdleHeadWave()
+    return
+  }
+  const emotion = stageActionEmotionMap[next]
+  if (emotion) {
+    triggerLargeMotion(emotion, holdMs)
+  }
+  stageActionTimer.value = window.setTimeout(() => {
+    stageActionState.value = audioDeviceEnabled.value ? 'listening' : 'idle'
+  }, holdMs)
+}
+
+function setExpression(target: Partial<typeof defaultModelParameters>, holdMs: number) {
+  if (expressionAnimationId.value) {
+    cancelAnimationFrame(expressionAnimationId.value)
+    expressionAnimationId.value = undefined
+  }
+  const now = performance.now()
+  expressionState.value = {
+    base: { ...modelParameters.value },
+    target,
+    startAt: now,
+    endAt: now + Math.max(holdMs, 0),
+  }
+  const step = (timestamp: number) => {
+    const current = expressionState.value
+    if (!current) {
+      expressionAnimationId.value = undefined
+      return
+    }
+    const { base, target, startAt, endAt } = current
+    const rising = Math.min(1, Math.max(0, (timestamp - startAt) / 240))
+    const holding = timestamp < endAt
+    const falling = holding ? 1 : Math.max(0, 1 - (timestamp - endAt) / expressionReleaseMs)
+    const intensity = Math.min(rising, falling)
+
+    const nextParams = { ...modelParameters.value }
+    const keys = Object.keys(target) as Array<keyof typeof defaultModelParameters>
+
+    for (const key of keys) {
+      const targetVal = target[key]
+      const baseVal = base[key]
+      if (typeof targetVal === 'number' && typeof baseVal === 'number') {
+        nextParams[key] = baseVal + (targetVal - baseVal) * intensity
+      }
+    }
+
+    modelParameters.value = nextParams
+
+    if (intensity > 0) {
+      expressionAnimationId.value = requestAnimationFrame(step)
+      return
+    }
+    expressionState.value = null
+    expressionAnimationId.value = undefined
+  }
+  expressionAnimationId.value = requestAnimationFrame(step)
+}
+function expressionTargetsForEmotion(name: EmotionPayload['name']) {
+  switch (name) {
+    case Emotion.Happy:
+      return { mouthForm: 0.6, cheek: 0.7, leftEyeSmile: 0.7, rightEyeSmile: 0.7 }
+    case Emotion.Sad:
+      return { leftEyebrowY: -0.4, rightEyebrowY: -0.4, mouthForm: -0.4, cheek: 0.1 }
+    case Emotion.Angry:
+      return { leftEyebrowAngle: -0.6, rightEyebrowAngle: 0.6, mouthForm: -0.3, cheek: 0.2 }
+    case Emotion.Think:
+      return { leftEyebrowY: 0.2, rightEyebrowY: 0.2, leftEyebrowForm: -0.3, rightEyebrowForm: -0.3 }
+    case Emotion.Surprise:
+      return { leftEyebrowY: 0.8, rightEyebrowY: 0.8, mouthForm: 0.4, cheek: 0.3 }
+    case Emotion.Awkward:
+      return { leftEyebrowY: 0.2, rightEyebrowY: 0.2, mouthForm: -0.1, cheek: 0.2 }
+    case Emotion.Question:
+      return { leftEyebrowY: 0.5, rightEyebrowY: 0.1, mouthForm: 0.1 }
+    case Emotion.Curious:
+      return { leftEyebrowY: 0.4, rightEyebrowY: 0.4, mouthForm: 0.2 }
+    default:
+      return {}
+  }
+}
+
+function triggerDebugMotionScan() {
+  if (stageModelRenderer.value !== 'live2d')
+    return
+
+  lastEmotionTrigger.value = { source: 'scan', timestamp: Date.now() }
+  stopDebugMotionScan()
+  const candidates = availableMotions.value
+    .filter(motion => !toMotionSearchText(motion).includes('idle'))
+    .slice(0, 10)
+  const queue = candidates.length > 0 ? candidates : availableMotions.value.slice(0, 10)
+  if (queue.length === 0)
+    return
+
+  let index = 0
+  debugMotionScanTimer.value = window.setInterval(() => {
+    const motion = queue[index % queue.length]
+    currentMotion.value = { group: motion.motionName, index: motion.motionIndex }
+    index++
+    if (index >= queue.length) {
+      stopDebugMotionScan()
+    }
+  }, 500)
+}
+
+function triggerDebugPulse() {
+  if (stageModelRenderer.value !== 'live2d')
+    return
+
+  lastEmotionTrigger.value = { source: 'pulse', timestamp: Date.now() }
+  stopDebugPulse()
+  const base = { ...modelParameters.value }
+  const start = performance.now()
+  const durationMs = 2400
+
+  const step = (timestamp: number) => {
+    const elapsed = timestamp - start
+    const t = Math.min(1, elapsed / durationMs)
+    const wave = Math.sin(elapsed / 70)
+    const mouth = (Math.sin(elapsed / 40) + 1) / 2
+    modelParameters.value = {
+      ...modelParameters.value,
+      angleX: wave * 28,
+      angleY: Math.cos(elapsed / 90) * 10,
+      bodyAngleX: wave * 18,
+      mouthOpen: mouth,
+      cheek: Math.max(0, Math.min(1, mouth * 0.9)),
+    }
+    if (t < 1) {
+      debugPulseAnimationId.value = requestAnimationFrame(step)
+      return
+    }
+    modelParameters.value = {
+      ...modelParameters.value,
+      ...defaultModelParameters,
+      ...base,
+    }
+    debugPulseAnimationId.value = undefined
+  }
+
+  debugPulseAnimationId.value = requestAnimationFrame(step)
+}
+
+function triggerLargeMotion(name: EmotionPayload['name'], holdMs: number) {
+  lastEmotionTrigger.value = { source: 'act', name, timestamp: Date.now() }
+  emotionsQueue.enqueue({
+    name,
+    intensity: 1,
+    force: true,
+    holdMs,
+  })
+}
+
+function bumpTextMouth(durationMs: number) {
+  const next = Date.now() + durationMs
+  if (next > textMouthUntil.value) {
+    textMouthUntil.value = next
+  }
+}
+
+function freezeHeadAngles() {
+  headFrozen.value = true
+  headFrozenAngles.value = {
+    x: modelParameters.value.angleX,
+    y: modelParameters.value.angleY,
+    z: modelParameters.value.angleZ,
+  }
+}
+
+function releaseHeadAngles() {
+  headFrozen.value = false
+}
+
+function startIdleHeadWave() {
+  if (idleHeadWaveId.value)
+    return
+  enableMotionLock('idle-head-wave')
+  const base = {
+    x: modelParameters.value.angleX,
+    y: modelParameters.value.angleY,
+    z: modelParameters.value.angleZ,
+  }
+  const start = performance.now()
+  const step = (timestamp: number) => {
+    const elapsed = timestamp - start
+    if (headFrozen.value) {
+      idleHeadWaveId.value = requestAnimationFrame(step)
+      return
+    }
+
+    // Natural breathing rhythm (approx 4s cycle)
+    const breathCycle = (Math.sin(elapsed / 2000) + 1) * 0.5
+
+    modelParameters.value = {
+      ...modelParameters.value,
+      // Smoother, layered head movement
+      angleX: base.x + Math.sin(elapsed / 2300) * 3 + Math.sin(elapsed / 800) * 1,
+      angleY: base.y + Math.cos(elapsed / 2700) * 3,
+      angleZ: base.z + Math.sin(elapsed / 3500) * 2,
+      // Body sways slightly with breath
+      bodyAngleX: Math.sin(elapsed / 2000) * 1.5,
+      breath: breathCycle,
+    }
+    idleHeadWaveId.value = requestAnimationFrame(step)
+  }
+  idleHeadWaveId.value = requestAnimationFrame(step)
+}
+
+function stopIdleHeadWave() {
+  if (!idleHeadWaveId.value)
+    return
+  cancelAnimationFrame(idleHeadWaveId.value)
+  idleHeadWaveId.value = undefined
+  disableMotionLock('idle-head-wave')
+}
 
 const emotionsQueue = createQueue<EmotionPayload>({
   handlers: [
@@ -133,7 +605,7 @@ const emotionsQueue = createQueue<EmotionPayload>({
         await vrmViewerRef.value!.setExpression(value, ctx.data.intensity)
       }
       else if (stageModelRenderer.value === 'live2d') {
-        currentMotion.value = { group: EMOTION_EmotionMotionName_value[ctx.data.name] }
+        applyLive2DMotionByEmotion(ctx.data)
       }
     },
   ],
@@ -141,6 +613,7 @@ const emotionsQueue = createQueue<EmotionPayload>({
 
 const emotionMessageContentQueue = useEmotionsMessageQueue(emotionsQueue)
 emotionMessageContentQueue.onHandlerEvent('emotion', (emotion) => {
+  lastEmotionTrigger.value = { source: 'act', name: emotion.name, timestamp: Date.now() }
   // eslint-disable-next-line no-console
   console.debug('emotion detected', emotion)
 })
@@ -151,8 +624,22 @@ delaysQueue.onHandlerEvent('delay', (delay) => {
   console.debug('delay detected', delay)
 })
 
+watch(audioDeviceEnabled, (enabled) => {
+  applyStageActionState(enabled ? 'listening' : 'idle', 1400)
+}, { immediate: true })
+
 // Play special token: delay or emotion
 function playSpecialToken(special: string) {
+  if (special.includes('<|ACT')) {
+    const emotion: EmotionPayload = {
+      name: Emotion.Think,
+      intensity: 1,
+      force: true,
+      holdMs: 2500,
+    }
+    lastEmotionTrigger.value = { source: 'act', name: emotion.name, timestamp: Date.now() }
+    emotionsQueue.enqueue(emotion)
+  }
   delaysQueue.enqueue(special)
   emotionMessageContentQueue.enqueue(special)
 }
@@ -235,7 +722,11 @@ const speechPipeline = createSpeechPipeline<AudioBuffer>({
     if (signal.aborted)
       return null
 
+<<<<<<< HEAD
+    if (!narrationEnabled.value)
+=======
     if (activeSpeechProvider.value === 'speech-noop')
+>>>>>>> origin/main
       return null
 
     if (!activeSpeechProvider.value)
@@ -301,24 +792,43 @@ const speechPipeline = createSpeechPipeline<AudioBuffer>({
       ? speechStore.generateSSML(request.text, voice, { ...providerConfig, pitch: pitch.value })
       : request.text
 
-    try {
-      const res = await generateSpeech({
-        ...provider.speech(model, providerConfig),
-        input,
-        voice: voice.id,
-      })
+    const requestAudio = async () => {
+      try {
+        const res = await generateSpeech({
+          ...provider.speech(model, providerConfig),
+          input,
+          voice: voice.id,
+        })
 
-      if (signal.aborted || !res || res.byteLength === 0)
+        if (signal.aborted || !res || res.byteLength === 0)
+          return null
+
+        const audioBuffer = await audioContext.decodeAudioData(res)
+        return audioBuffer
+      }
+      catch {
         return null
+      }
+    }
 
-      const audioBuffer = await audioContext.decodeAudioData(res)
-      return audioBuffer
+    let audioBuffer = await requestAudio()
+    for (const delayMs of [400, 800]) {
+      if (audioBuffer || signal.aborted)
+        break
+      await new Promise(resolve => setTimeout(resolve, delayMs))
+      if (!signal.aborted) {
+        audioBuffer = await requestAudio()
+      }
     }
-    catch {
-      return null
-    }
+
+    return audioBuffer
   },
   playback: playbackManager,
+  segmenter: (tokens, meta) => createTtsSegmentStream(tokens, meta, {
+    boost: 2,
+    minimumWords: 3,
+    maximumWords: 12,
+  }),
 })
 
 initIOTracer()
@@ -363,12 +873,18 @@ function startLipSyncLoop() {
     return
 
   const tick = () => {
-    if (!nowSpeaking.value || !live2dLipSync.value) {
-      mouthOpenSize.value = 0
+    const audioOpen = nowSpeaking.value && live2dLipSync.value ? live2dLipSync.value.getMouthOpen() : 0
+    const textActive = Date.now() < textMouthUntil.value
+    const textOpen = textActive ? (0.2 + textMouthStrength * ((Math.sin(performance.now() / textMouthWaveMs) + 1) / 2)) : 0
+    if (headFrozen.value) {
+      modelParameters.value = {
+        ...modelParameters.value,
+        angleX: headFrozenAngles.value.x,
+        angleY: headFrozenAngles.value.y,
+        angleZ: headFrozenAngles.value.z,
+      }
     }
-    else {
-      mouthOpenSize.value = live2dLipSync.value.getMouthOpen()
-    }
+    mouthOpenSize.value = Math.max(audioOpen, textOpen)
     lipSyncLoopId.value = requestAnimationFrame(tick)
   }
 
@@ -447,6 +963,9 @@ chatHookCleanups.push(onBeforeMessageComposed(async () => {
 
   setupAnalyser()
   await setupLipSync()
+  startIdleHeadWave()
+  assistantMotionTriggered.value = false
+  textMouthUntil.value = 0
   // Reset assistant caption for a new message
   assistantCaption.value = ''
   try {
@@ -476,17 +995,43 @@ chatHookCleanups.push(onBeforeMessageComposed(async () => {
   })
 }))
 
-chatHookCleanups.push(onBeforeSend(async () => {
-  currentMotion.value = { group: EmotionThinkMotionName }
+chatHookCleanups.push(onBeforeSend(async (message) => {
+  playSpecialToken(message)
+  triggerLargeMotion(Emotion.Surprise, 2200)
+  if (!commandOnlyMotionMode) {
+    currentMotion.value = { group: 'Think' }
+  }
 }))
 
 chatHookCleanups.push(onTokenLiteral(async (literal) => {
   currentChatIntent?.writeLiteral(literal)
+  playSpecialToken(literal)
+  if (!narrationEnabled.value) {
+    assistantCaption.value += ` ${literal}`
+    try {
+      postCaption({ type: 'caption-assistant', text: assistantCaption.value })
+    }
+    catch {
+    }
+    try {
+      postPresent({ type: 'assistant-append', text: literal })
+    }
+    catch {
+    }
+  }
+  if (!assistantMotionTriggered.value) {
+    stopIdleHeadWave()
+    freezeHeadAngles()
+    triggerLargeMotion(Emotion.Happy, 2400)
+    assistantMotionTriggered.value = true
+  }
+  bumpTextMouth(textMouthDurationMs)
 }))
 
 chatHookCleanups.push(onTokenSpecial(async (special) => {
   // console.debug('Stage received special token:', special)
   currentChatIntent?.writeSpecial(special)
+  bumpTextMouth(textMouthDurationMs)
 }))
 
 chatHookCleanups.push(onStreamEnd(async () => {
@@ -497,14 +1042,85 @@ chatHookCleanups.push(onStreamEnd(async () => {
 chatHookCleanups.push(onAssistantResponseEnd(async (_message) => {
   currentChatIntent?.end()
   currentChatIntent = null
-  // const res = await embed({
-  //   ...transformersProvider.embed('Xenova/nomic-embed-text-v1'),
-  //   input: message,
-  // })
-
-  // await db.value?.execute(`INSERT INTO memory_test (vec) VALUES (${JSON.stringify(res.embedding)});`)
+  releaseHeadAngles()
+  startIdleHeadWave()
+  textMouthUntil.value = Date.now()
+  assistantMotionTriggered.value = false
+  applyStageActionState('done', 1400)
 }))
 
+// ==================== Bridge State Handlers (Phase 3: T012-T016) ====================
+// Map Lobster Bridge structured states to animation/emotion system
+
+chatHookCleanups.push(onBridgeStateChanged(async (state) => {
+  switch (state) {
+    case 'think':
+      // T012: Waiting/thinking state - show Think motion
+      stopIdleHeadWave()
+      freezeHeadAngles()
+      triggerLargeMotion(Emotion.Think, 3000)
+      if (!commandOnlyMotionMode) {
+        currentMotion.value = { group: 'Think' }
+      }
+      break
+
+    case 'tool_use':
+      // T014: Tool execution state - show focused/thinking motion
+      stopIdleHeadWave()
+      freezeHeadAngles()
+      triggerLargeMotion(Emotion.Curious, 2500)
+      if (!commandOnlyMotionMode) {
+        currentMotion.value = { group: 'Think' }
+      }
+      break
+
+    case 'ask_user':
+      // T014: Waiting for user permission - pause speaking, show waiting state
+      releaseHeadAngles()
+      startIdleHeadWave()
+      textMouthUntil.value = 0
+      assistantMotionTriggered.value = false
+      triggerLargeMotion(Emotion.Awkward, 2000)
+      break
+
+    case 'success':
+      // T015: Success state - brief happy, then idle
+      releaseHeadAngles()
+      startIdleHeadWave()
+      textMouthUntil.value = Date.now()
+      assistantMotionTriggered.value = false
+      applyStageActionState('done', 1400)
+      break
+
+    case 'error':
+      // T015: Error state - show surprise/concern, then idle
+      releaseHeadAngles()
+      startIdleHeadWave()
+      textMouthUntil.value = Date.now()
+      assistantMotionTriggered.value = false
+      triggerLargeMotion(Emotion.Surprise, 2000)
+      break
+  }
+}))
+
+// T016: Permission request also triggers ask_user-like state
+chatHookCleanups.push(onBridgePermissionRequest(async (_permission) => {
+  // When a permission request arrives, ensure the character shows a waiting state
+  releaseHeadAngles()
+  startIdleHeadWave()
+  textMouthUntil.value = 0
+  assistantMotionTriggered.value = false
+  triggerLargeMotion(Emotion.Awkward, 2000)
+}))
+
+<<<<<<< HEAD
+onUnmounted(() => {
+  lipSyncStarted.value = false
+  clearStageActionTimer()
+})
+
+=======
+>>>>>>> origin/main
 // Resume audio context on first user interaction (browser requirement)
 let audioContextResumed = false
 function resumeAudioContextOnInteraction() {
@@ -525,7 +1141,15 @@ if (typeof window !== 'undefined') {
 }
 
 onMounted(async () => {
+<<<<<<< HEAD
+  if (commandOnlyMotionMode) {
+    live2dIdleAnimationEnabled.value = false
+  }
+  db.value = drizzle({ connection: { bundles: getImportUrlBundles() } })
+  await db.value.execute(`CREATE TABLE memory_test (vec FLOAT[768]);`)
+=======
   await getDb() // stub for future update
+>>>>>>> origin/main
 })
 
 watch([stageModelRenderer, () => props.paused], ([renderer]) => {
@@ -553,7 +1177,30 @@ function readRenderTargetRegionAtClientPoint(clientX: number, clientY: number, r
 }
 
 onUnmounted(() => {
+<<<<<<< HEAD
+  clearForceMotionTimer()
+  stopDebugMotionScan()
+  stopDebugPulse()
+  if (expressionAnimationId.value) {
+    cancelAnimationFrame(expressionAnimationId.value)
+    expressionAnimationId.value = undefined
+  }
+  expressionState.value = null
+  motionLockReasons.value = new Set()
+  motionLockEnabled.value = false
+  stopIdleHeadWave()
+  if (cachedIdleAnimationEnabled.value !== undefined) {
+    live2dIdleAnimationEnabled.value = cachedIdleAnimationEnabled.value
+    cachedIdleAnimationEnabled.value = undefined
+  }
+  if (lipSyncLoopId.value) {
+    cancelAnimationFrame(lipSyncLoopId.value)
+    lipSyncLoopId.value = undefined
+  }
+
+=======
   resetLive2dLipSync()
+>>>>>>> origin/main
   chatHookCleanups.forEach(dispose => dispose?.())
   viewUpdateCleanups.forEach(dispose => dispose?.())
 })
@@ -565,7 +1212,39 @@ defineExpose({
 </script>
 
 <template>
+<<<<<<< HEAD
+  <div relative>
+    <div v-if="live2dDebugControlsEnabled" bg="black/45" absolute left-3 top-3 z-60 flex flex-wrap gap-2 rounded-lg p-2 backdrop-blur>
+      <div v-if="lastEmotionTriggerLabel" rounded-md border="1 white/20" px-2 py-1 text-xs text="white/80">
+        触发: {{ lastEmotionTriggerLabel }}
+      </div>
+      <button
+        v-for="emotionName in debugEmotionButtons"
+        :key="emotionName"
+        rounded-md border="1 white/30" px-2 py-1 text-xs text-white
+        hover:bg="white/15"
+        @click="triggerDebugEmotion(emotionName)"
+      >
+        {{ emotionName }}
+      </button>
+      <button
+        rounded-md border="1 white/30" px-2 py-1 text-xs text-white
+        hover:bg="white/15"
+        @click="triggerDebugMotionScan"
+      >
+        scan
+      </button>
+      <button
+        rounded-md border="1 white/30" px-2 py-1 text-xs text-white
+        hover:bg="white/15"
+        @click="triggerDebugPulse"
+      >
+        pulse
+      </button>
+    </div>
+=======
   <div relative h-full w-full>
+>>>>>>> origin/main
     <div h-full w-full>
       <Live2DScene
         v-if="stageModelRenderer === 'live2d' && showStage"

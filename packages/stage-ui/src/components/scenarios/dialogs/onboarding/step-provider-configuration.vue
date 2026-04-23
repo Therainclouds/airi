@@ -195,6 +195,14 @@ initializeForm()
       <Callout :label="t('settings.dialogs.onboarding.credentialsSafeLabel')" theme="violet">
         <div>
           <div>
+<<<<<<< HEAD
+            Xclaw is running pure locally in your browser, and we will never steal your credentials for AI / LLM providers. But keep in mind that your API keys are sensitive information. Make sure to keep them safe and do not share them with anyone.
+          </div>
+          <div>
+            Xclaw is open sourced at <div inline-flex translate-y-1 items-center gap-1>
+              <div i-simple-icons:github inline-block /><a decoration-underline decoration-dashed href="https://github.com/moeru-ai/airi" target="_blank" rel="noopener noreferrer">GitHub</a>
+            </div>, if you want to check how we handle your credentials, feel free to inspect our code.
+=======
             {{ t('settings.dialogs.onboarding.credentialsSafeLocal') }}
           </div>
           <div>
@@ -205,6 +213,7 @@ initializeForm()
                 </span>
               </template>
             </i18n-t>
+>>>>>>> origin/main
           </div>
         </div>
       </Callout>

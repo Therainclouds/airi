@@ -78,6 +78,7 @@ const characterSettings = computed(() => {
     scenario: selectedCard.value.scenario,
     systemPrompt: selectedCard.value.systemPrompt,
     postHistoryInstructions: selectedCard.value.postHistoryInstructions,
+    openclawprompt: selectedCard.value.extensions?.airi?.agents?.openclaw?.prompt ?? '',
   }
 })
 

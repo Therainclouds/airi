@@ -29,6 +29,35 @@ function toolNameFrom(tool: Tool) {
 
 export const useLLM = defineStore('llm', () => {
   const toolsCompatibility = ref<Map<string, boolean>>(new Map())
+<<<<<<< HEAD
+  const discoveringToolsCompatibility = ref<Map<string, Promise<boolean>>>(new Map())
+
+  async function discoverToolsCompatibility(model: string, chatProvider: ChatProvider, _: Message[], options?: Omit<StreamOptions, 'supportsTools'>) {
+    const key = `${chatProvider.chat(model).baseURL}-${model}`
+
+    // Cached, no need to discover again
+    if (toolsCompatibility.value.has(key)) {
+      return
+    }
+
+    if (discoveringToolsCompatibility.value.has(key)) {
+      await discoveringToolsCompatibility.value.get(key)
+      return
+    }
+
+    const discoveryPromise = attemptForToolsCompatibilityDiscovery(model, chatProvider, _, { ...options, toolsCompatibility: toolsCompatibility.value })
+    discoveringToolsCompatibility.value.set(key, discoveryPromise)
+
+    const res = await discoveryPromise.finally(() => {
+      discoveringToolsCompatibility.value.delete(key)
+    })
+
+    toolsCompatibility.value.set(key, res)
+  }
+
+  function stream(model: string, chatProvider: ChatProvider, messages: Message[], options?: StreamOptions) {
+    return streamFrom(model, chatProvider, messages, { ...options, toolsCompatibility: toolsCompatibility.value })
+=======
   const modsServerChannelStore = useModsServerChannelStore()
   const llmToolsStore = useLlmToolsStore()
 
@@ -78,6 +107,7 @@ export const useLLM = defineStore('llm', () => {
       }
       throw err
     }
+>>>>>>> origin/main
   }
 
   async function models(apiUrl: string, apiKey: string) {

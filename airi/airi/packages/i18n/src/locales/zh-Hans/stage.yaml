@@ -1,0 +1,93 @@
+chat:
+  message:
+    character-name:
+      airi: Xclaw
+      core-system: 核心系统
+      you: 你
+  reasoning: 思考
+attachments:
+  action: 添加图片或文件
+  bridgeOnly: 当前提供商仅支持图片视觉输入。普通文件请切换到 LobsterAI / OpenClaw Bridge 后再上传。
+  capabilityHint: 已启用图片视觉输入
+  capabilityHintBridge: 已启用图片与文件多模态输入
+  readFailed: 文件读取失败，请重试。
+  tooLargeFile: 文件大小不能超过 {size} MB。
+  tooLargeImage: 图片大小不能超过 {size} MB。
+  tooMany: 最多只能附加 {count} 个文件或图片。
+  unsupportedType: 当前仅支持 PNG、JPG、WEBP、GIF、PDF、TXT、MD、CSV、JSON 文件。
+camera:
+  autoGreetingFallback: 我看到你啦，很高兴见到你，我们开始聊聊吧。
+  autoCaptureHint: 开启后会在预览期间低频刷新最近一张待发送画面。
+  autoCaptureOff: 低频自动抓帧已关闭
+  autoCaptureOn: 低频自动抓帧已开启
+  autoSendingIn: {seconds} 秒后自动发送
+  capture: 抓取当前画面
+  captureFailed: 抓取当前画面失败，请重试。
+  capturing: 正在抓取画面
+  close: 关闭摄像头面板
+  debugPanelTitle: 视觉控制面板
+  device: 摄像头设备
+  deviceFallback: 摄像头
+  draftReady: 已保留一张待发送画面
+  errors:
+    cameraUnavailable: 摄像头暂时不可用，请检查设备或权限后重试。
+    deviceBusy: 摄像头正在被其他应用占用。
+    deviceNotFound: 未检测到可用摄像头。
+    deviceUnavailable: 当前摄像头暂时不可用，请切换设备后重试。
+    permissionDenied: 摄像头权限被拒绝，请先允许访问。
+  expand: 展开到控制面板
+  idle: 摄像头待开启
+  minimize: 收起至状态卡
+  multiDeviceHint: 已检测到 {count} 个摄像头设备。
+  open: 打开摄像头面板
+  pause: 暂停自动抓帧
+  permissionDenied: 摄像头权限被拒绝
+  previewing: 摄像头预览中
+  privacyHint: 仅在你点击发送后，当前抓取的画面才会进入模型上下文。
+  processing: 处理中...
+  ready: 就绪
+  requestingPermission: 正在申请摄像头权限
+  sendHint: 预览只在当前页面可见时运行。
+  sending: 发送中
+  speechAttachHint: 开启后，语音直发会优先附带最近一张摄像头快照。
+  speechAttachOff: 语音联动画面已关闭
+  speechAttachOn: 语音联动画面已开启
+  start: 开始预览
+  startFailed: 启动摄像头预览失败，请检查权限和设备状态。
+  stop: 停止预览
+  title: 摄像头抓帧视觉
+  tooLarge: 当前抓取画面过大，请调整摄像头距离后重试。
+  unsupported: 当前环境暂不支持摄像头抓帧。
+  waiting: 等待画面
+  willCaptureSoon: 即将自动抓帧
+message: 说点什么...
+microphone:
+  autoSendOff: 识别结果会先填入输入框
+  autoSendReady: 识别完成后会自动发送
+  permissionDenied: 麦克风权限被拒绝，请先允许访问后再试。
+  startFailed: 启动语音识别失败，请检查麦克风和转写配置。
+operations:
+  load-models: 加载模型
+  load-models-status:
+    loading: 模型加载中
+    ready: 已就绪
+select-a-audio-input: 选择一个音频输入设备
+select-a-model: 选择一个模型
+select-a-voice: 选择一个声线
+viewers:
+  debug-menu:
+    emotions: 表情
+    emotions-btn:
+      angry: '😠 生气'
+      awkward: '😳 尴尬'
+      happy: '😄 开心'
+      neutral: '🙂 日常'
+      question: '🤔 疑问'
+      sad: '😫 难过'
+      surprised: '🤯 惊喜'
+      think: '🤨 思考'
+    vrm:
+      camera: 摄像机
+      model:
+        title: 模型
+waiting: 等待中

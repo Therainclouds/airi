@@ -216,6 +216,114 @@ onMounted(() => {
       'dark:text-neutral-100',
     ]"
   >
+<<<<<<< HEAD
+    <div :class="['mx-auto max-w-[min(960px,calc(100%-2rem))]', 'px-6 py-20']">
+      <AboutContent title="Project" highlight="Xclaw" subtitle="Desktop ver." />
+
+      <!-- Main Content Card -->
+      <div :class="['mb-12', 'rounded-2xl', 'bg-white/50 dark:bg-black/20', 'p-6', 'backdrop-blur-sm']">
+        <!-- Build Info -->
+        <div :class="['flex flex-wrap items-center justify-between gap-4', 'mb-6', 'border-b border-neutral-200/50 dark:border-neutral-800/50', 'pb-6']">
+          <div>
+            <div :class="['text-sm text-neutral-500 dark:text-neutral-400']">
+              Current Version
+            </div>
+            <div :class="['text-xl font-medium font-mono']">
+              {{ buildInfo.version }}
+            </div>
+          </div>
+          <div :class="['text-right text-xs text-neutral-400 dark:text-neutral-500']">
+            <div>{{ buildInfo.branch }}@{{ buildInfo.commit }}</div>
+            <div>{{ buildInfo.builtOn }}</div>
+          </div>
+        </div>
+
+        <!-- Update Logic -->
+        <div :class="['flex flex-col gap-4']">
+          <!-- State: Available -->
+          <div v-if="updateState.status === 'available'" :class="['flex flex-col gap-4']">
+            <div :class="['text-sm flex flex-wrap items-center gap-2']">
+              <span :class="['font-mono text-neutral-600 dark:text-neutral-300']">v{{ buildInfo.version }}</span>
+              <div :class="['i-solar:arrow-right-line-duotone text-lg text-neutral-400']" />
+              <span :class="['font-mono text-pink-500 dark:text-pink-400 font-bold']">v{{ updateState.info?.version }}</span>
+            </div>
+            <div>
+              <Button
+                variant="primary"
+                :loading="isBusy"
+                icon="i-solar:download-minimalistic-outline"
+                label="Download Update"
+                @click="handleDownloadClick()"
+              />
+            </div>
+          </div>
+
+          <!-- State: Downloading -->
+          <div v-else-if="updateState.status === 'downloading'" :class="['flex flex-col gap-2']">
+            <div :class="['flex justify-between text-sm']">
+              <span>Downloading update...</span>
+              <span :class="['font-mono']">{{ updateState.progress?.percent.toFixed(1) }}%</span>
+            </div>
+            <Progress :progress="updateState.progress?.percent ?? 0" />
+            <div :class="['text-xs text-neutral-400 text-right font-mono']">
+              {{ ((updateState.progress?.bytesPerSecond ?? 0) / 1024 / 1024).toFixed(2) }} MB/s
+            </div>
+          </div>
+
+          <!-- State: Downloaded -->
+          <div v-else-if="updateState.status === 'downloaded'" :class="['flex flex-col gap-4']">
+            <div :class="['text-sm text-emerald-600 dark:text-emerald-400']">
+              Update ready to install (v{{ updateState.info?.version }}).
+            </div>
+            <div>
+              <DoubleCheckButton
+                variant="primary"
+                @confirm="quitAndInstall()"
+              >
+                Restart to update
+                <template #confirm>
+                  Confirm Restart
+                </template>
+                <template #cancel>
+                  Cancel
+                </template>
+              </DoubleCheckButton>
+            </div>
+          </div>
+
+          <!-- State: Idle, Checking, Error, Disabled, Not Available -->
+          <div v-else :class="['flex flex-col gap-4']">
+            <div v-if="isError" :class="['text-sm text-red-600 dark:text-red-400']">
+              Error: {{ updateState.error?.message }}
+            </div>
+
+            <div :class="['flex flex-wrap gap-2']">
+              <Button
+                :variant="isError ? 'caution' : 'secondary'"
+                :loading="isBusy"
+                :disabled="isDisabled || (isLatestVersion && !isError)"
+                :icon="isLatestVersion ? 'i-solar:check-circle-outline' : isDisabled ? 'i-solar:forbidden-circle-outline' : 'i-solar:refresh-outline'"
+                :label="isBusy ? 'Checking...' : isLatestVersion ? 'Latest version' : isDisabled ? 'Updates disabled in Dev' : isError ? 'Retry Check' : 'Check for updates'"
+                @click="checkForUpdates()"
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Links -->
+      <div>
+        <div :class="['text-neutral-500 dark:text-neutral-400 mb-4']">
+          Links
+        </div>
+        <div :class="['flex flex-wrap gap-2']">
+          <a
+            v-for="link in links"
+            :key="link.href"
+            :href="link.href"
+            target="_blank"
+            class="contents"
+=======
     <div :class="['mx-auto max-w-[min(960px,calc(100%-2rem))]', 'p-6']">
       <AboutContent
         title="Project"
@@ -232,6 +340,7 @@ onMounted(() => {
               'bg-neutral-200/80 dark:bg-neutral-800',
               'backdrop-blur-sm',
             ]"
+>>>>>>> origin/main
           >
             <!-- Build Info -->
             <div

@@ -7,8 +7,13 @@ const serverURL = env.CAPACITOR_DEV_SERVER_URL
 const appId = argv.includes('android') ? 'ai.moeru.airi_pocket' : 'ai.moeru.airi-pocket'
 
 const config: CapacitorConfig = {
+<<<<<<< HEAD
+  appId: 'ai.moeru.airi',
+  appName: 'Xclaw',
+=======
   appId,
   appName: 'AIRI',
+>>>>>>> origin/main
   webDir: 'dist',
   server: serverURL
     ? {

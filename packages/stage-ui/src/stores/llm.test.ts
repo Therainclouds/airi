@@ -1,11 +1,33 @@
 import type { ChatProvider } from '@xsai-ext/providers/utils'
 import type { Message, Tool } from '@xsai/shared-chat'
 
+<<<<<<< HEAD
+import { createOpenRouter } from '@xsai-ext/providers/create'
+import { createPinia, setActivePinia } from 'pinia'
+import { describe, expect, it, vi } from 'vitest'
+
+import { attemptForToolsCompatibilityDiscovery, useLLM } from './llm'
+
+const streamTextMock = vi.hoisted(() => vi.fn(async (options: any) => {
+  await Promise.resolve()
+  await options.onEvent?.({ type: 'finish' })
+}))
+
+vi.mock('@xsai/stream-text', () => ({
+  streamText: streamTextMock,
+}))
+
+vi.mock('../tools', () => ({
+  debug: vi.fn(async () => []),
+  mcp: vi.fn(async () => []),
+}))
+=======
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { isToolRelatedError, useLLM } from './llm'
 import { useLlmToolsStore } from './llm-tools'
+>>>>>>> origin/main
 
 const {
   streamTextMock,
@@ -61,6 +83,39 @@ function toolNameFrom(tool: unknown) {
   if (typeof tool !== 'object' || tool === null)
     return undefined
 
+<<<<<<< HEAD
+describe('useLLM', () => {
+  it('should dedupe concurrent tools compatibility discovery for the same provider and model', async () => {
+    setActivePinia(createPinia())
+    streamTextMock.mockClear()
+
+    const store = useLLM()
+    const chatProvider = {
+      chat: () => ({
+        apiKey: 'test-key',
+        baseURL: 'http://127.0.0.1:19888/',
+      }),
+    }
+
+    await Promise.all([
+      store.discoverToolsCompatibility('claude-agent', chatProvider as any, []),
+      store.discoverToolsCompatibility('claude-agent', chatProvider as any, []),
+    ])
+
+    expect(streamTextMock).toHaveBeenCalledTimes(2)
+
+    await store.discoverToolsCompatibility('claude-agent', chatProvider as any, [])
+
+    expect(streamTextMock).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe.skipIf(!hasOpenRouterApiKey)('llm store', { timeout: 60000 }, async () => {
+  it('should be false for phi-4', async () => {
+    // TODO: base url should not be hardcoded, wait for https://github.com/moeru-ai/xsai/pull/194
+    const res1 = await attemptForToolsCompatibilityDiscovery('microsoft/phi-4', createOpenRouter(env.LLM_API_OPENROUTER_API_KEY!, 'https://openrouter.ai/api/v1/'), [])
+    expect(res1).toBe(false)
+=======
   const candidate = tool as {
     name?: string
     function?: {
@@ -78,6 +133,7 @@ describe('isToolRelatedError', () => {
     debugMock.mockClear()
     createSparkCommandToolMock.mockClear()
     setActivePinia(createPinia())
+>>>>>>> origin/main
   })
 
   const positives: [provider: string, msg: string][] = [

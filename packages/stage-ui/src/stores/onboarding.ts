@@ -25,6 +25,10 @@ export const useOnboardingStore = defineStore('onboarding', () => {
 
   // Check if any essential provider is configured
   const hasEssentialProviderConfigured = computed(() => {
+<<<<<<< HEAD
+    const essentialProviders = ['openclaw-agent', 'openai', 'anthropic', 'google-generative-ai', 'openrouter-ai', 'ollama', 'deepseek', 'openai-compatible']
+    return essentialProviders.some(providerId => providersStore.configuredProviders[providerId])
+=======
     return essentialProviderIds.some(providerId => providersStore.configuredProviders[providerId])
   })
 
@@ -40,6 +44,7 @@ export const useOnboardingStore = defineStore('onboarding', () => {
 
       return hasNonEmptyText(providerConfig.apiKey)
     })
+>>>>>>> origin/main
   })
 
   // Check if first-time setup should be shown

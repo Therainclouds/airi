@@ -2,29 +2,49 @@ import type { WebSocketEventInputs } from '@proj-airi/server-sdk'
 import type { ChatProvider } from '@xsai-ext/providers/utils'
 import type { CommonContentPart, Message, ToolMessage } from '@xsai/shared-chat'
 
-import type { ChatAssistantMessage, ChatSlices, ChatStreamEventContext, StreamingAssistantMessage } from '../types/chat'
+import type { ChatAssistantMessage, ChatHistoryItem, ChatSlices, ChatStreamEventContext, StreamingAssistantMessage } from '../types/chat'
+import type { ChatSessionBridgeFileRef, ChatSessionBridgeMode, ChatSessionBridgeState } from '../types/chat-session'
 import type { StreamEvent, StreamOptions } from './llm'
 
+<<<<<<< HEAD
+import { defaultPerfTracer } from '@proj-airi/stage-shared'
+=======
 import { IOAttributes, IOEvents, IOSpanNames, IOSubsystems } from '@proj-airi/stage-shared'
+>>>>>>> origin/main
 import { createQueue } from '@proj-airi/stream-kit'
 import { nanoid } from 'nanoid'
 import { defineStore, storeToRefs } from 'pinia'
 import { computed, ref, toRaw } from 'vue'
 
 import { useAnalytics } from '../composables'
-import { useLlmmarkerParser } from '../composables/llm-marker-parser'
+import { stripLlmControlTokens, useLlmmarkerParser } from '../composables/llm-marker-parser'
 import { categorizeResponse, createStreamingCategorizer } from '../composables/response-categoriser'
+<<<<<<< HEAD
+import { shouldAttemptBridge, shouldUseStandardLlmStream } from './chat-bridge-mode'
+import { createDatetimeContext } from './chat/context-providers'
+=======
 import { activeTurnSpan, startSpan } from '../composables/use-io-tracer'
 import { formatContextPromptText } from './chat/context-prompt'
 import { createDatetimeContext, createMinecraftContext } from './chat/context-providers'
+>>>>>>> origin/main
 import { useChatContextStore } from './chat/context-store'
 import { createChatHooks } from './chat/hooks'
 import { useChatSessionStore } from './chat/session-store'
 import { useChatStreamStore } from './chat/stream-store'
 import { useContextObservabilityStore } from './devtools/context-observability'
 import { useLLM } from './llm'
+import { useAiriCardStore } from './modules/airi-card'
 import { useConsciousnessStore } from './modules/consciousness'
 
+<<<<<<< HEAD
+interface LobsterBridgeOptions {
+  fileAttachments?: Array<{ type: 'file', data: string, mimeType: string, name: string }>
+  reattachFileRefs?: Array<{ id: string, name: string, mimeType: string, size?: number }>
+  skillIds?: string[]
+  baseUrl: string
+  apiKey: string
+  useBridge?: boolean
+=======
 function cloneStreamingMessage(message: StreamingAssistantMessage): StreamingAssistantMessage {
   try {
     return structuredClone(message)
@@ -32,6 +52,7 @@ function cloneStreamingMessage(message: StreamingAssistantMessage): StreamingAss
   catch {
     return JSON.parse(JSON.stringify(message)) as StreamingAssistantMessage
   }
+>>>>>>> origin/main
 }
 
 interface SendOptions {
@@ -41,6 +62,7 @@ interface SendOptions {
   attachments?: { type: 'image', data: string, mimeType: string }[]
   tools?: StreamOptions['tools']
   input?: WebSocketEventInputs
+  bridgeOptions?: LobsterBridgeOptions
 }
 
 interface ForkOptions {
@@ -73,7 +95,9 @@ export interface QueuedSendSnapshot {
 
 export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
   const llmStore = useLLM()
+  const airiCardStore = useAiriCardStore()
   const consciousnessStore = useConsciousnessStore()
+  const { bridgeSystemPrompt } = storeToRefs(airiCardStore)
   const { activeProvider } = storeToRefs(consciousnessStore)
   const { trackFirstMessage } = useAnalytics()
 
@@ -88,6 +112,112 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
   const pendingQueuedSends = ref<QueuedSend[]>([])
   const pendingQueuedSendCount = computed(() => pendingQueuedSends.value.length)
   const hooks = createChatHooks()
+
+  function getPersistedBridgeFileRefs(sessionId: string): ChatSessionBridgeFileRef[] {
+    return chatSession.getSessionMeta(sessionId)?.bridgeState?.fileRefs ?? []
+  }
+
+  function getPersistedBridgeState(sessionId: string): ChatSessionBridgeState | undefined {
+    return chatSession.getSessionMeta(sessionId)?.bridgeState
+  }
+
+  function updatePersistedBridgeState(sessionId: string, updater: (bridgeState: ChatSessionBridgeState | undefined) => ChatSessionBridgeState | undefined) {
+    chatSession.updateBridgeState(sessionId, updater)
+  }
+
+  function setPersistedBridgeFileRefs(sessionId: string, fileRefs: ChatSessionBridgeFileRef[]) {
+    updatePersistedBridgeState(sessionId, bridgeState => ({
+      ...bridgeState,
+      fileRefs,
+    }))
+  }
+
+  function mergeBridgeFileRefs(
+    existing: ChatSessionBridgeFileRef[],
+    incoming: Array<{ id: string, name: string, mimeType: string, size?: number, lobsterSessionId?: string, clientTurnId?: string }>,
+  ): ChatSessionBridgeFileRef[] {
+    const merged = new Map(existing.map(file => [file.id, file]))
+    for (const file of incoming) {
+      merged.set(file.id, {
+        id: file.id,
+        name: file.name,
+        mimeType: file.mimeType,
+        size: file.size,
+        uploadedAt: Date.now(),
+        bindingState: 'active',
+        lobsterSessionId: file.lobsterSessionId,
+        clientTurnId: file.clientTurnId,
+      })
+    }
+    return Array.from(merged.values()).sort((a, b) => b.uploadedAt - a.uploadedAt)
+  }
+
+  function setBridgeBindingSnapshot(
+    sessionId: string,
+    payload: { lobsterSessionId?: string, sessionMode?: ChatSessionBridgeMode },
+  ) {
+    updatePersistedBridgeState(sessionId, (bridgeState) => {
+      const previousSessionId = bridgeState?.lobsterSessionId
+      const lobsterSessionId = payload.lobsterSessionId ?? previousSessionId
+      const bindingStatus = previousSessionId && lobsterSessionId && previousSessionId !== lobsterSessionId
+        ? 'rebound'
+        : 'bound'
+      return {
+        ...bridgeState,
+        lobsterSessionId,
+        sessionMode: payload.sessionMode ?? bridgeState?.sessionMode,
+        bindingStatus,
+        lastBoundAt: Date.now(),
+        fileRefs: (bridgeState?.fileRefs ?? []).map((file) => {
+          if (!previousSessionId || previousSessionId === lobsterSessionId) {
+            return file
+          }
+          return {
+            ...file,
+            bindingState: file.lobsterSessionId && file.lobsterSessionId !== lobsterSessionId ? 'stale' : file.bindingState,
+          }
+        }),
+      }
+    })
+  }
+
+  function markBridgeFilesState(sessionId: string, fileIds: string[], bindingState: 'active' | 'stale') {
+    if (fileIds.length === 0) {
+      return
+    }
+    const targetFileIds = new Set(fileIds)
+    updatePersistedBridgeState(sessionId, bridgeState => ({
+      ...bridgeState,
+      fileRefs: (bridgeState?.fileRefs ?? []).map(file => targetFileIds.has(file.id)
+        ? { ...file, bindingState }
+        : file),
+    }))
+  }
+
+  function resolveBridgeSessionMode(
+    sessionId: string,
+    options: Pick<LobsterBridgeOptions, 'fileAttachments' | 'reattachFileRefs' | 'skillIds'>,
+    imageAttachmentCount: number,
+  ): 'auto' | ChatSessionBridgeMode {
+    const persistedMode = getPersistedBridgeState(sessionId)?.sessionMode
+    const requiresAgent = Boolean(
+      persistedMode === 'agent'
+      || options.fileAttachments?.length
+      || options.reattachFileRefs?.length
+      || options.skillIds?.length
+      || imageAttachmentCount > 0,
+    )
+    return requiresAgent ? 'agent' : 'auto'
+  }
+
+  function extractBridgeErrorCode(error: unknown): string | undefined {
+    if (!error || typeof error !== 'object') {
+      return undefined
+    }
+    return typeof (error as Record<string, unknown>).code === 'string'
+      ? (error as Record<string, unknown>).code as string
+      : undefined
+  }
 
   const sendQueue = createQueue<QueuedSend>({
     handlers: [
@@ -162,6 +292,34 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
     const shouldAbort = () => isStaleGeneration()
     if (shouldAbort())
       return
+    const clientTurnId = String(streamingMessageContext.message.id)
+
+    const perfStartedAt = performance.now()
+    const useBridge = shouldAttemptBridge(options.bridgeOptions)
+    let firstVisibleTokenAt: number | null = null
+    let firstBridgeStateAt: number | null = null
+    const perfMetaBase = {
+      sessionId,
+      provider: activeProvider.value,
+      model: options.model,
+      transport: useBridge ? 'bridge' : 'standard',
+      imageAttachmentsCount: options.attachments?.length ?? 0,
+      fileAttachmentsCount: options.bridgeOptions?.fileAttachments?.length ?? 0,
+      skillIdsCount: options.bridgeOptions?.skillIds?.length ?? 0,
+    }
+    const emitChatPerfEvent = (name: string, duration?: number, meta?: Record<string, unknown>) => {
+      defaultPerfTracer.emit({
+        tracerId: 'chat',
+        name,
+        ts: perfStartedAt,
+        duration,
+        meta: {
+          ...perfMetaBase,
+          ...meta,
+        },
+      })
+    }
+    emitChatPerfEvent('turn.start')
 
     sending.value = true
     let hadExistingTurn = false
@@ -176,8 +334,37 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
       }
     }
 
+    const applyFinalVisibleText = (visibleText: string) => {
+      buildingMessage.content = visibleText
+
+      let appliedTextSlice = false
+      const nextSlices = buildingMessage.slices.filter((slice) => {
+        if (slice.type !== 'text')
+          return true
+
+        if (!appliedTextSlice && visibleText) {
+          slice.text = visibleText
+          appliedTextSlice = true
+          return true
+        }
+
+        return false
+      })
+
+      if (!appliedTextSlice && visibleText) {
+        nextSlices.unshift({
+          type: 'text',
+          text: visibleText,
+        })
+      }
+
+      buildingMessage.slices = nextSlices
+    }
+
     updateUI()
     trackFirstMessage()
+
+    let sessionMessagesForSend: ChatHistoryItem[] = []
 
     try {
       await hooks.emitBeforeMessageComposedHooks(sendingMessage, streamingMessageContext)
@@ -210,6 +397,11 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
       if (shouldAbort())
         return
 
+<<<<<<< HEAD
+      sessionMessagesForSend = chatSession.getSessionMessages(sessionId)
+      sessionMessagesForSend.push({ role: 'user', content: finalContent, createdAt: sendingCreatedAt, id: nanoid() })
+      chatSession.persistSessionMessages(sessionId)
+=======
       chatSession.appendSessionMessage(sessionId, {
         role: 'user',
         content: finalContent,
@@ -217,6 +409,7 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
         id: nanoid(),
       })
       const sessionMessagesForSend = chatSession.getSessionMessages(sessionId)
+>>>>>>> origin/main
 
       const categorizer = createStreamingCategorizer(activeProvider.value)
       let streamPosition = 0
@@ -232,6 +425,12 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
           streamPosition += literal.length
 
           if (speechOnly.trim()) {
+            if (firstVisibleTokenAt === null) {
+              firstVisibleTokenAt = performance.now()
+              emitChatPerfEvent('turn.first-visible-token', firstVisibleTokenAt - perfStartedAt, {
+                fullTextLength: fullText.length + speechOnly.length,
+              })
+            }
             buildingMessage.content += speechOnly
 
             await hooks.emitTokenLiteralHooks(speechOnly, streamingMessageContext)
@@ -260,14 +459,27 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
             return
 
           const finalCategorization = categorizeResponse(fullText, activeProvider.value)
+          const sanitizedSpeech = stripLlmControlTokens(finalCategorization.speech || '')
+          const sanitizedFullText = stripLlmControlTokens(fullText)
+          const fallbackSpeech = (sanitizedSpeech || sanitizedFullText).trim()
+          const hasVisibleContent = typeof buildingMessage.content === 'string'
+            ? Boolean(buildingMessage.content.trim())
+            : Array.isArray(buildingMessage.content) && buildingMessage.content.length > 0
+
+          if (fallbackSpeech) {
+            applyFinalVisibleText(fallbackSpeech)
+          }
+          else if (!hasVisibleContent && buildingMessage.slices.length === 0) {
+            buildingMessage.content = ''
+          }
 
           buildingMessage.categorization = {
-            speech: finalCategorization.speech,
-            reasoning: finalCategorization.reasoning,
+            speech: sanitizedSpeech,
+            reasoning: buildingMessage.categorization?.reasoning || finalCategorization.reasoning,
           }
           updateUI()
         },
-        minLiteralEmitLength: 24,
+        minLiteralEmitLength: 4,
       })
 
       const toolCallQueue = createQueue<ChatSlices>({
@@ -359,10 +571,255 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
 
       let fullText = ''
       const headers = (options.providerConfig?.headers || {}) as Record<string, string>
+      const streamTimeoutMs = 180000
+      let streamTimeoutId: ReturnType<typeof setTimeout> | undefined
+      let timeoutReject: ((err: Error) => void) | null = null
+      const timeoutPromise = new Promise<void>((_, reject) => {
+        timeoutReject = reject
+      })
+      const scheduleStreamTimeout = () => {
+        if (streamTimeoutId) {
+          clearTimeout(streamTimeoutId)
+        }
+        streamTimeoutId = setTimeout(() => {
+          timeoutReject?.(new Error('Stream timeout'))
+        }, streamTimeoutMs)
+      }
 
       if (shouldAbort())
         return
 
+<<<<<<< HEAD
+      scheduleStreamTimeout()
+      try {
+        if (options.bridgeOptions && useBridge) {
+          const requestedReattachFileIds = options.bridgeOptions.reattachFileRefs?.map(file => file.id) ?? []
+          try {
+            // Bridge path: use Lobster Bridge AsyncIterable stream
+            const { buildBridgePromptText, buildUserContent, streamChat } = await import('../services/lobster-bridge')
+            const { baseUrl, apiKey, fileAttachments, reattachFileRefs, skillIds } = options.bridgeOptions
+            const requestedSessionMode = resolveBridgeSessionMode(sessionId, { fileAttachments, reattachFileRefs, skillIds }, options.attachments?.length ?? 0)
+            const bridgePromptText = buildBridgePromptText(sendingMessage, contextsSnapshot, {
+              hasImages: Boolean(options.attachments?.length),
+            })
+            const bridgeUserContent = buildUserContent(bridgePromptText, options.attachments ?? [])
+
+            let resolvedBridgeFiles: Array<{ id: string, name: string, mimeType: string, size?: number }> = []
+            let uploadedBridgeFiles: Array<{ id: string, name: string, mimeType: string, size?: number }> = []
+            if (fileAttachments?.length) {
+              const { uploadFiles, bindSession } = await import('../services/lobster-bridge')
+              const binding = await bindSession(baseUrl, apiKey, sessionId)
+              setBridgeBindingSnapshot(sessionId, {
+                lobsterSessionId: binding.session.lobsterSessionId,
+                sessionMode: binding.session.sessionMode,
+              })
+              uploadedBridgeFiles = await uploadFiles(baseUrl, apiKey, sessionId, clientTurnId, fileAttachments)
+              resolvedBridgeFiles = [...resolvedBridgeFiles, ...uploadedBridgeFiles]
+              if (uploadedBridgeFiles.length > 0) {
+                setPersistedBridgeFileRefs(sessionId, mergeBridgeFileRefs(
+                  getPersistedBridgeFileRefs(sessionId),
+                  uploadedBridgeFiles.map(file => ({
+                    ...file,
+                    lobsterSessionId: binding.session.lobsterSessionId,
+                    clientTurnId,
+                  })),
+                ))
+              }
+            }
+            if (reattachFileRefs?.length) {
+              const { bindSession, reattachFiles } = await import('../services/lobster-bridge')
+              const binding = await bindSession(baseUrl, apiKey, sessionId)
+              setBridgeBindingSnapshot(sessionId, {
+                lobsterSessionId: binding.session.lobsterSessionId,
+                sessionMode: binding.session.sessionMode,
+              })
+              const reattachedFiles = await reattachFiles(baseUrl, apiKey, sessionId, clientTurnId, reattachFileRefs.map(file => file.id))
+              resolvedBridgeFiles = [...resolvedBridgeFiles, ...reattachedFiles]
+              markBridgeFilesState(sessionId, reattachFileRefs.map(file => file.id), 'active')
+            }
+
+            const bridgePayload = {
+              airiSessionId: sessionId,
+              clientTurnId,
+              sessionMode: requestedSessionMode,
+              model: options.model,
+              stream: true as const,
+              fileIds: resolvedBridgeFiles.map(file => file.id),
+              skillIds,
+              systemPrompt: bridgeSystemPrompt.value || undefined,
+              messages: [{ role: 'user' as const, content: bridgeUserContent }],
+            } as any
+
+            for await (const event of streamChat({
+              baseUrl,
+              apiKey,
+              request: bridgePayload,
+              onSessionBound: (payload) => {
+                setBridgeBindingSnapshot(sessionId, {
+                  lobsterSessionId: payload.lobsterSessionId,
+                  sessionMode: payload.sessionMode,
+                })
+              },
+              onStateChange: async (state: string) => {
+                if (firstBridgeStateAt === null) {
+                  firstBridgeStateAt = performance.now()
+                  emitChatPerfEvent('turn.bridge-first-state', firstBridgeStateAt - perfStartedAt, {
+                    state,
+                  })
+                }
+                await hooks.emitBridgeStateChangedHooks(state, streamingMessageContext)
+              },
+              onPermissionRequest: async (permPayload) => {
+                await hooks.emitBridgePermissionRequestHooks({
+                  requestId: permPayload.requestId,
+                  capabilityToken: permPayload.capabilityToken,
+                  toolName: permPayload.toolName,
+                  toolInput: permPayload.toolInput,
+                  expiresAt: permPayload.expiresAt,
+                }, streamingMessageContext)
+              },
+            })) {
+              if (shouldAbort())
+                break
+
+              scheduleStreamTimeout()
+              const eventType = (event as any).type
+
+              switch (eventType) {
+                case 'assistant.delta': {
+                  const delta = (event as any).payload?.delta ?? ''
+                  if (!delta)
+                    break
+                  fullText += delta
+                  await parser.consume(delta)
+                  break
+                }
+                case 'assistant.final': {
+                  const finalContent = (event as any).payload?.content ?? ''
+                  if (finalContent) {
+                    if (!fullText) {
+                      fullText = finalContent
+                      await parser.consume(finalContent)
+                    }
+                    else if (finalContent.startsWith(fullText)) {
+                      const suffix = finalContent.slice(fullText.length)
+                      fullText = finalContent
+                      if (suffix)
+                        await parser.consume(suffix)
+                    }
+                    else if (finalContent !== fullText) {
+                      fullText = finalContent
+                    }
+                  }
+                  break
+                }
+                case 'reasoning.delta': {
+                  const delta = (event as any).payload?.delta ?? ''
+                  if (!delta)
+                    break
+                  buildingMessage.categorization = {
+                    speech: buildingMessage.categorization?.speech ?? '',
+                    reasoning: `${buildingMessage.categorization?.reasoning ?? ''}${delta}`,
+                  }
+                  updateUI()
+                  break
+                }
+                case 'reasoning.final': {
+                  const finalReasoning = (event as any).payload?.content ?? ''
+                  buildingMessage.categorization = {
+                    speech: buildingMessage.categorization?.speech ?? '',
+                    reasoning: finalReasoning || buildingMessage.categorization?.reasoning || '',
+                  }
+                  updateUI()
+                  break
+                }
+                case 'tool.call': {
+                  const toolCallEvent = event as any
+                  toolCallQueue.enqueue({
+                    type: 'tool-call',
+                    toolCall: {
+                      toolName: String(toolCallEvent.payload?.name ?? ''),
+                      args: typeof toolCallEvent.payload?.input === 'string'
+                        ? toolCallEvent.payload.input
+                        : JSON.stringify(toolCallEvent.payload?.input ?? {}, null, 2),
+                      toolCallId: String(toolCallEvent.payload?.id ?? nanoid()),
+                      toolCallType: 'function',
+                    },
+                  })
+                  break
+                }
+                case 'tool.result': {
+                  const toolResultEvent = event as any
+                  const toolCallId = String(toolResultEvent.payload?.id ?? nanoid())
+                  const result = typeof toolResultEvent.payload?.result === 'string'
+                    ? toolResultEvent.payload.result
+                    : JSON.stringify(toolResultEvent.payload?.result ?? {}, null, 2)
+                  toolCallQueue.enqueue({
+                    type: 'tool-call-result',
+                    id: toolCallId,
+                    result,
+                  })
+                  break
+                }
+                case 'done':
+                case 'session.bound':
+                case 'state.changed':
+                  break
+              }
+            }
+          }
+          catch (bridgeError) {
+            if (extractBridgeErrorCode(bridgeError) === 'bridge_file_missing') {
+              markBridgeFilesState(sessionId, requestedReattachFileIds, 'stale')
+            }
+            console.warn('[chat] Bridge stream failed:', bridgeError)
+            throw bridgeError
+          }
+        }
+
+        if (shouldUseStandardLlmStream(options.bridgeOptions)) {
+          await Promise.race([
+            llmStore.stream(options.model, options.chatProvider, newMessages as Message[], {
+              headers,
+              tools: options.tools,
+              onStreamEvent: async (event: StreamEvent) => {
+                scheduleStreamTimeout()
+                switch (event.type) {
+                  case 'tool-call':
+                    toolCallQueue.enqueue({
+                      type: 'tool-call',
+                      toolCall: event,
+                    })
+
+                    break
+                  case 'tool-result':
+                    toolCallQueue.enqueue({
+                      type: 'tool-call-result',
+                      id: event.toolCallId,
+                      result: event.result,
+                    })
+
+                    break
+                  case 'text-delta':
+                    fullText += event.text
+                    await parser.consume(event.text)
+                    break
+                  case 'finish':
+                    break
+                  case 'error':
+                    throw event.error ?? new Error('Stream error')
+                }
+              },
+            }),
+            timeoutPromise,
+          ])
+        }
+      }
+      finally {
+        if (streamTimeoutId) {
+          clearTimeout(streamTimeoutId)
+        }
+=======
       hadExistingTurn = !!activeTurnSpan.value
       if (!hadExistingTurn)
         activeTurnSpan.value = startSpan(IOSpanNames.InteractionTurn)
@@ -430,12 +887,27 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
       finally {
         // TODO: Record errors on llmSpan
         llmSpan.end()
+>>>>>>> origin/main
       }
 
       await parser.end()
 
+<<<<<<< HEAD
+      if (
+        !isStaleGeneration()
+        && (
+          buildingMessage.slices.length > 0
+          || (typeof buildingMessage.content === 'string' && buildingMessage.content.trim().length > 0)
+          || buildingMessage.tool_results.length > 0
+          || Boolean(buildingMessage.categorization?.reasoning?.trim())
+        )
+      ) {
+        sessionMessagesForSend.push(toRaw(buildingMessage))
+        chatSession.persistSessionMessages(sessionId)
+=======
       if (!isStaleGeneration() && buildingMessage.slices.length > 0) {
         chatSession.appendSessionMessage(sessionId, toRaw(buildingMessage))
+>>>>>>> origin/main
       }
 
       await hooks.emitStreamEndHooks(streamingMessageContext)
@@ -448,6 +920,12 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
         outputText: fullText,
         toolCalls: sessionMessagesForSend.filter(msg => msg.role === 'tool') as ToolMessage[],
       }, streamingMessageContext)
+      emitChatPerfEvent('turn.complete', performance.now() - perfStartedAt, {
+        outputLength: fullText.length,
+        receivedFirstVisibleToken: firstVisibleTokenAt !== null,
+        firstVisibleTokenMs: firstVisibleTokenAt === null ? null : firstVisibleTokenAt - perfStartedAt,
+        firstBridgeStateMs: firstBridgeStateAt === null ? null : firstBridgeStateAt - perfStartedAt,
+      })
 
       if (isForegroundSession()) {
         streamingMessage.value = { role: 'assistant', content: '', slices: [], tool_results: [] }
@@ -455,6 +933,24 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
     }
     catch (error) {
       console.error('Error sending message:', error)
+      emitChatPerfEvent('turn.error', performance.now() - perfStartedAt, {
+        firstVisibleTokenMs: firstVisibleTokenAt === null ? null : firstVisibleTokenAt - perfStartedAt,
+        firstBridgeStateMs: firstBridgeStateAt === null ? null : firstBridgeStateAt - perfStartedAt,
+        error: error instanceof Error ? error.message : String(error || ''),
+      })
+      if (!isStaleGeneration()) {
+        const message = error instanceof Error ? error.message : String(error || '')
+        sessionMessagesForSend.push({
+          role: 'error',
+          content: `请求失败，请检查模型配置或网络连接${message ? ` (${message})` : ''}`,
+          createdAt: Date.now(),
+          id: nanoid(),
+        })
+        chatSession.persistSessionMessages(sessionId)
+        if (isForegroundSession()) {
+          streamingMessage.value = { role: 'assistant', content: '', slices: [], tool_results: [] }
+        }
+      }
       throw error
     }
     finally {
@@ -549,6 +1045,8 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
     emitAssistantResponseEndHooks: hooks.emitAssistantResponseEndHooks,
     emitAssistantMessageHooks: hooks.emitAssistantMessageHooks,
     emitChatTurnCompleteHooks: hooks.emitChatTurnCompleteHooks,
+    emitBridgeStateChangedHooks: hooks.emitBridgeStateChangedHooks,
+    emitBridgePermissionRequestHooks: hooks.emitBridgePermissionRequestHooks,
 
     onBeforeMessageComposed: hooks.onBeforeMessageComposed,
     onAfterMessageComposed: hooks.onAfterMessageComposed,
@@ -560,5 +1058,7 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
     onAssistantResponseEnd: hooks.onAssistantResponseEnd,
     onAssistantMessage: hooks.onAssistantMessage,
     onChatTurnComplete: hooks.onChatTurnComplete,
+    onBridgeStateChanged: hooks.onBridgeStateChanged,
+    onBridgePermissionRequest: hooks.onBridgePermissionRequest,
   }
 })

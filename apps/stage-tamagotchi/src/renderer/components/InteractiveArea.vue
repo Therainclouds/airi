@@ -39,6 +39,18 @@ const sendModeLabels = computed<Record<SendMode, string>>(() => ({
   'double-enter': t('stage.send-mode.double-enter'),
 }))
 
+function shouldDiscoverActiveProviderToolsCompatibility() {
+  if (!activeProvider.value || !activeModel.value) {
+    return false
+  }
+
+  if (activeProvider.value === 'lobster-agent') {
+    return (providersStore.getProviderConfig(activeProvider.value) as Record<string, any>)?.useBridge === false
+  }
+
+  return true
+}
+
 async function handleSend() {
   if (isComposing.value) {
     return
@@ -149,8 +161,21 @@ function removeAttachment(index: number) {
   }
 }
 
+<<<<<<< HEAD
+watch([activeProvider, activeModel], async () => {
+  if (shouldDiscoverActiveProviderToolsCompatibility()) {
+    await discoverToolsCompatibility(activeModel.value, await providersStore.getProviderInstance<ChatProvider>(activeProvider.value), [])
+  }
+}, { immediate: true })
+
+onAfterMessageComposed(async () => {
+  messageInput.value = ''
+  attachments.value.forEach(att => URL.revokeObjectURL(att.url))
+  attachments.value = []
+=======
 watch(sendMode, () => {
   lastEnterTime.value = 0
+>>>>>>> origin/main
 })
 
 const historyMessages = computed(() => messages.value as unknown as ChatHistoryItem[])

@@ -69,6 +69,9 @@ const ALIYUN_NLS_REGIONS = [
 
 type AliyunNlsRegion = typeof ALIYUN_NLS_REGIONS[number]
 
+const PROVIDER_VALIDATION_RETRY_DELAY_MS = 5000
+const PROVIDER_VALIDATION_RETRY_LIMIT = 18
+
 export interface ProviderMetadata {
   id: string
   order?: number
@@ -206,6 +209,11 @@ export interface ProviderRuntimeState {
   models: ModelInfo[]
   isLoadingModels: boolean
   modelLoadError: string | null
+}
+
+interface ProviderValidationRetryState {
+  attempts: number
+  timer: ReturnType<typeof setTimeout> | null
 }
 
 export const useProvidersStore = defineStore('providers', () => {
@@ -1220,22 +1228,6 @@ export const useProvidersStore = defineStore('providers', () => {
             return res
           }
 
-          try {
-            const controller = new AbortController()
-            const timeout = setTimeout(() => controller.abort(), 5000)
-            const response = await fetch(`${config.baseUrl as string}audio/voices`, { signal: controller.signal })
-            clearTimeout(timeout)
-
-            if (!response.ok) {
-              const reason = `IndexTTS unreachable: HTTP ${response.status} ${response.statusText}`
-              return { errors: [new Error(reason)], reason, valid: false }
-            }
-          }
-          catch (err) {
-            const reason = `IndexTTS connection failed: ${String(err)}`
-            return { errors: [err as Error], reason, valid: false }
-          }
-
           return {
             errors,
             reason: errors.filter(e => e).map(e => String(e)).join(', ') || '',
@@ -1673,28 +1665,6 @@ export const useProvidersStore = defineStore('providers', () => {
           if (res)
             return res
 
-          try {
-            const controller = new AbortController()
-            const timeout = setTimeout(() => controller.abort(), 5000)
-            const response = await fetch(`${config.baseUrl as string}health`, {
-              method: 'GET',
-              headers: {
-                'player2-game-key': 'airi',
-              },
-              signal: controller.signal,
-            })
-            clearTimeout(timeout)
-
-            if (!response.ok) {
-              const reason = `Player2 speech unreachable: HTTP ${response.status} ${response.statusText}`
-              return { errors: [new Error(reason)], reason, valid: false }
-            }
-          }
-          catch (err) {
-            const reason = `Player2 speech connection failed: ${String(err)}`
-            return { errors: [err as Error], reason, valid: false }
-          }
-
           return {
             errors,
             reason: errors.filter(e => e).map(e => String(e)).join(', ') || '',
@@ -1950,8 +1920,12 @@ export const useProvidersStore = defineStore('providers', () => {
 
   // const validatedCredentials = ref<Record<string, string>>({})
   const providerRuntimeState = ref<Record<string, ProviderRuntimeState>>({})
+<<<<<<< HEAD
+  const providerValidationRetryState = ref<Record<string, ProviderValidationRetryState>>({})
+=======
   const providerValidationInFlight = new Map<string, Promise<boolean>>()
   const providerRevalidationLoops = new Map<string, { resume: () => void }>()
+>>>>>>> origin/main
 
   const configuredProviders = computed(() => {
     const result: Record<string, boolean> = {}
@@ -1992,8 +1966,13 @@ export const useProvidersStore = defineStore('providers', () => {
     const cacheKey = `${providerId}:${configString}`
     const forceValidation = options.force === true
 
+<<<<<<< HEAD
+    if (runtimeState?.validatedCredentialHash === configString && runtimeState.isConfigured === true)
+      return true
+=======
     if (!forceValidation && runtimeState?.validatedCredentialHash === configString && typeof runtimeState.isConfigured === 'boolean')
       return runtimeState.isConfigured
+>>>>>>> origin/main
 
     if (!forceValidation) {
       const pending = providerValidationInFlight.get(cacheKey)
@@ -2057,10 +2036,81 @@ export const useProvidersStore = defineStore('providers', () => {
         modelLoadError: null,
       }
     }
+    if (!providerValidationRetryState.value[providerId]) {
+      providerValidationRetryState.value[providerId] = {
+        attempts: 0,
+        timer: null,
+      }
+    }
   }
 
   // Initialize all providers
   Object.keys(providerMetadata).forEach(initializeProvider)
+  for (const providerId of ['lobster-agent', 'openclaw-agent']) {
+    if (!addedProviders.value[providerId]) {
+      addedProviders.value[providerId] = true
+    }
+  }
+
+  function clearProviderValidationRetry(providerId: string, resetAttempts = false) {
+    const retryState = providerValidationRetryState.value[providerId]
+    if (!retryState)
+      return
+
+    if (retryState.timer) {
+      clearTimeout(retryState.timer)
+      retryState.timer = null
+    }
+
+    if (resetAttempts)
+      retryState.attempts = 0
+  }
+
+  function shouldRetryProviderValidation(providerId: string) {
+    const config = providerCredentials.value[providerId]
+    if (!config)
+      return false
+
+    return ['lobster-agent', 'openclaw-agent'].includes(providerId) || Boolean(addedProviders.value[providerId])
+  }
+
+  function scheduleProviderValidationRetry(providerId: string) {
+    const runtimeState = providerRuntimeState.value[providerId]
+    const retryState = providerValidationRetryState.value[providerId]
+
+    if (!runtimeState || !retryState || runtimeState.isConfigured || !shouldRetryProviderValidation(providerId))
+      return
+
+    if (retryState.timer || retryState.attempts >= PROVIDER_VALIDATION_RETRY_LIMIT)
+      return
+
+    retryState.attempts += 1
+    retryState.timer = setTimeout(async () => {
+      retryState.timer = null
+
+      try {
+        const isValid = await validateProvider(providerId)
+        if (providerRuntimeState.value[providerId]) {
+          providerRuntimeState.value[providerId].isConfigured = isValid
+        }
+
+        if (isValid) {
+          clearProviderValidationRetry(providerId, true)
+          if (providerMetadata[providerId]?.capabilities.listModels) {
+            void fetchModelsForProvider(providerId)
+          }
+          return
+        }
+      }
+      catch {
+        if (providerRuntimeState.value[providerId]) {
+          providerRuntimeState.value[providerId].isConfigured = false
+        }
+      }
+
+      scheduleProviderValidationRetry(providerId)
+    }, PROVIDER_VALIDATION_RETRY_DELAY_MS)
+  }
 
   function startPeriodicRuntimeValidation() {
     for (const [providerId, intervalMs] of providerValidationIntervalMsById.entries()) {
@@ -2089,21 +2139,33 @@ export const useProvidersStore = defineStore('providers', () => {
           if (providerRuntimeState.value[providerId]) {
             const isValid = await validateProvider(providerId)
             providerRuntimeState.value[providerId].isConfigured = isValid
+            if (isValid)
+              clearProviderValidationRetry(providerId, true)
+            else
+              scheduleProviderValidationRetry(providerId)
           }
         }
         catch {
           if (providerRuntimeState.value[providerId]) {
             providerRuntimeState.value[providerId].isConfigured = false
           }
+          scheduleProviderValidationRetry(providerId)
         }
       }))
   }
 
+<<<<<<< HEAD
+  watch(providerCredentials, async () => {
+    Object.keys(providerMetadata).forEach(providerId => clearProviderValidationRetry(providerId, true))
+    await updateConfigurationStatus()
+  }, { deep: true, immediate: true })
+=======
   // Call initially and watch for changes
   watch(providerCredentials, updateConfigurationStatus, { deep: true, immediate: true })
   startPeriodicRuntimeValidation()
 
   watch(() => authState.isAuthenticated, updateConfigurationStatus)
+>>>>>>> origin/main
 
   // Available providers (only those that are properly configured)
   const availableProviders = computed(() => Object.keys(providerMetadata).filter(providerId => providerRuntimeState.value[providerId]?.isConfigured))
@@ -2134,8 +2196,10 @@ export const useProvidersStore = defineStore('providers', () => {
   })
 
   function deleteProvider(providerId: string) {
+    clearProviderValidationRetry(providerId, true)
     delete providerCredentials.value[providerId]
     delete providerRuntimeState.value[providerId]
+    delete providerValidationRetryState.value[providerId]
     unmarkProviderAdded(providerId)
   }
 
@@ -2160,9 +2224,11 @@ export const useProvidersStore = defineStore('providers', () => {
   }
 
   async function resetProviderSettings() {
+    Object.keys(providerValidationRetryState.value).forEach(providerId => clearProviderValidationRetry(providerId, true))
     providerCredentials.value = {}
     addedProviders.value = {}
     providerRuntimeState.value = {}
+    providerValidationRetryState.value = {}
 
     Object.keys(providerMetadata).forEach(initializeProvider)
     await updateConfigurationStatus()

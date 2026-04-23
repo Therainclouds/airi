@@ -10,7 +10,7 @@ animations:
     title: Use Page Specific Transitions
 dialogs:
   onboarding:
-    title: Welcome to AIRI!
+    title: Welcome to Xclaw!
     description: Let's set up your first AI provider to get started.
     selectProvider: Choose an AI Provider
     configureProvider: Configure {provider}
@@ -87,8 +87,20 @@ dialogs:
     last-submitted-preview: Last Submitted Payload Preview
 language:
   title: Language
+<<<<<<< HEAD
+  description: >
+    Change the language of the Xclaw interface. This will not affect the language
+    of the character's responses.
+hearing:
+  title: Hearing
+  description: Speech recognition
+narration:
+  title: Narrate Responses
+  description: Enable speech playback for Xclaw responses
+=======
   description: |
     UI language. You can set characters' language later.
+>>>>>>> origin/main
 controls-island:
   icon-size:
     title: Controls Island Icon Size
@@ -178,7 +190,7 @@ pages:
     delete: Delete
     delete_card: Delete Card
     delete_confirmation: Are you sure you want to delete this card?
-    description: Use AIRI character card presets
+    description: Use Xclaw character card presets
     description_label: Description
     drop_here: Drop to upload
     create_card: Create a new Card
@@ -199,9 +211,15 @@ pages:
         scenario: You recently woke up and forgot everything about your previous life.
         systemprompt: You will receive messages, answer to them like a real human.
         posthistoryinstructions: Remember to imitate an human.
+<<<<<<< HEAD
+      openclawprompt_notice: Maintain a dedicated prompt here for LobsterAI or OpenClaw Bridge sessions so AIRI native prompts no longer need to be forwarded.
+      openclawprompt_required_notice: The currently selected chat provider uses the Bridge flow, so an OpenClaw prompt is required before saving.
+      modules_info: Configure modules for this character card. If not set, default module configuration will be used.
+=======
       modules_info: >-
         Configure modules for this character card. If not set, default module
         configuration will be used.
+>>>>>>> origin/main
       use_default: Use default
       use_default_not_configured: Use default (not configured)
       fields_info:
@@ -221,6 +239,7 @@ pages:
         greetings: How your character should say "hello" ?
         systemprompt: Explain here to the AI LLM how it should answer when prompted.
         posthistoryinstructions: Place here anything the AI LLM should read after the messages history.
+        openclawprompt: Dedicated prompt for LobsterAI / OpenClaw Bridge. When using openclaw-agent or lobster-agent, maintain this field instead of forwarding AIRI native system prompts.
         version: >-
           Card version, you should increase this if you are making changes from
           a previous card.
@@ -234,6 +253,7 @@ pages:
         scenario: 'Error: A scenario is required.'
         systemprompt: 'Error: Please, provide a system prompt.'
         posthistoryinstructions: 'Error: Post history prompt is required.'
+        openclawprompt: 'Error: The current Bridge provider requires an OpenClaw prompt.'
     modules: Modules
     name_asc: Name (A-Z)
     name_desc: Name (Z-A)
@@ -241,6 +261,8 @@ pages:
     no_results: No matching cards found
     personality: Personality
     posthistoryinstructions: Post-History Instructions
+    openclawprompt: OpenClaw Prompt
+    openclawprompt_required_runtime: This character card does not have an OpenClaw prompt yet. Please configure it in card settings before sending messages through LobsterAI / OpenClaw Bridge.
     recent: Recently Added
     scenario: Scenario
     search: Search cards...
@@ -251,7 +273,7 @@ pages:
       model: Speech / Model
       voice: Speech / Voice
     systemprompt: System Prompt
-    title: AIRI Card
+    title: Xclaw Card
     try_different_search: Try a different search term
     upload: Upload
     upload_desc: Click or drag file to upload
@@ -260,7 +282,7 @@ pages:
     title: Memory
   data:
     title: Data
-    description: Manage stored AIRI data, exports, and resets
+    description: Manage stored Xclaw data, exports, and resets
     sections:
       chats:
         title: Chat sessions
@@ -293,7 +315,7 @@ pages:
         open: Open folder
       desktop:
         title: Reset desktop settings & states
-        description: Clear AIRI desktop settings and runtime state.
+        description: Clear Xclaw desktop settings and runtime state.
         reset: Reset desktop data
     confirmations:
       tooltip: Are you sure?
@@ -407,7 +429,7 @@ pages:
       description: Playing Factorio!
       title: Factorio
       enable: Enable Factorio Integration
-      enable-description: Allow AIRI to interact with Factorio game
+      enable-description: Allow Xclaw to interact with Factorio game
       server-address: Server Address
       server-address-description: The IP address or hostname of the Factorio server
       server-address-placeholder: Enter server address (e.g., localhost or 192.168.1.100)
@@ -421,9 +443,21 @@ pages:
       description: Playing Minecraft!
       title: Minecraft
       enable: Enable Minecraft Integration
+<<<<<<< HEAD
+      enable-description: Allow Xclaw to interact with Minecraft game
+      server-address: Server Address
+      server-address-description: The IP address or hostname of the Minecraft server
+      server-address-placeholder: Enter server address (e.g., localhost or play.example.com)
+      server-port: Server Port
+      server-port-description: The port number of the Minecraft server (default 25565)
+      username: Username
+      username-description: Your username in the Minecraft server
+      username-placeholder: Enter your Minecraft username
+=======
       enable-description: >-
         Include Minecraft self-knowledge in Stage chat turns and keep passive
         runtime visibility enabled.
+>>>>>>> origin/main
       configured: Minecraft is properly configured!
       read-only:
         title: Read-only shell
@@ -483,7 +517,7 @@ pages:
       description: Chat & voice chat over Discord
       title: Discord
       enable: Enable Discord Integration
-      enable-description: Allow AIRI to interact through Discord
+      enable-description: Allow Xclaw to interact through Discord
       token: Bot Token
       token-description: Your Discord bot token
       token-placeholder: Enter your Discord bot token
@@ -526,6 +560,9 @@ pages:
           voice-settings:
             input-ssml:
               placeholder: Enter SSML text...
+            narration:
+              label: Narrate Responses
+              description: Read responses aloud while keeping subtitles and mouth motion
             use-ssml:
               description: Enable to input raw SSML instead of plain text
               label: Use Custom SSML
@@ -538,7 +575,7 @@ pages:
       description: X / Twitter browsing and usage
       title: X / Twitter
       enable: Enable X / Twitter Integration
-      enable-description: Allow AIRI to interact with X / Twitter
+      enable-description: Allow Xclaw to interact with X / Twitter
       api-key: API Key
       api-key-description: Your X / Twitter API key
       api-key-placeholder: Enter your X / Twitter API key
@@ -603,9 +640,9 @@ pages:
     helpinfo:
       title: First time here?
       description: >
-        AIRI requires at least one {chat} provider to be configured to think,
+        Xclaw requires at least one {chat} provider to be configured to think,
         and behave properly. You could think of it as the brain of the
-        characters living in AIRI system.
+        characters living in Xclaw system.
     catalog:
       edit:
         config-id-not-found: Provider configuration not found.
@@ -898,9 +935,18 @@ pages:
       openai-compatible:
         description: OpenAI Compatible
         title: OpenAI Compatible
+<<<<<<< HEAD
+      openclaw-agent:
+        description: OpenClaw local bridge endpoint
+        title: OpenClaw Agent
+      lobster-agent:
+        description: LobsterAI local agent bridge
+        title: Lobster Agent
+=======
       nvidia:
         description: build.nvidia.com
         title: NVIDIA NIM
+>>>>>>> origin/main
       n1n:
         description: n1n.ai - High-performance AI API provider.
         title: n1n
@@ -984,6 +1030,68 @@ pages:
       description: Full address of the WebSocket server (e.g., ws://localhost:6121/ws)
       label: WebSocket Server Address
       placeholder: ws://localhost:6121/ws
+<<<<<<< HEAD
+  skills:
+    description: Manage Lobster skills, configs, and install entrypoints
+    title: Skills
+    lobster:
+      total: 'Total Skills'
+      enabledCount: 'Enabled'
+      manage: 'Manage Skills'
+      installed: 'Installed Skills'
+      list: 'Skills List'
+      listDesc: 'View current skill status, enable/disable skills, and open config editor.'
+      add: 'Add Skill'
+      addDesc: 'Download skills via Git URL, local path, or archive; high-risk skills go through a security review first.'
+      source: 'Skill Source'
+      sourcePlaceholder: 'Enter Git URL, local path, or accessible skill package source'
+      download: 'Download & Inspect'
+      clear: 'Clear'
+      config: 'Skill Config'
+      configDesc: 'Select a skill to read and edit its configuration.'
+      configEmpty: 'No configuration entries yet'
+      configEmptyDesc: "Add a new config entry, then save it to the skill's local configuration."
+      saveConfig: 'Save Config'
+      addEntry: 'Add Entry'
+      reRead: 'Re-read'
+      serviceAddress: 'Service Address'
+      defaultKeyWarning: 'Still using the default API Key'
+      defaultKeyWarningDesc: 'Configure a dedicated Lobster API Key in Provider settings before managing or downloading skills.'
+      refresh: 'Refresh'
+      providerSettings: 'Provider Settings'
+      filter: 'Filter Skills'
+      filterPlaceholder: 'Search by name, ID, or description'
+      noMatch: 'No matching skills'
+      noMatchDesc: 'Adjust your search, or add a new skill source below.'
+      enable: 'Enable'
+      disable: 'Disable'
+      statusEnabled: 'Enabled'
+      statusDisabled: 'Disabled'
+      builtin: 'Built-in'
+      configure: 'Configure'
+      configKey: 'Key'
+      configKeyPlaceholder: 'e.g. API_KEY'
+      configValue: 'Value'
+      configValuePlaceholder: 'Enter value'
+      configValueSensitive: 'Enter sensitive value'
+      show: 'Show'
+      hide: 'Hide'
+      delete: 'Delete'
+      duplicateKeys: 'Duplicate configuration keys detected'
+      noSkillSelected: 'No skill selected'
+      noSkillSelectedDesc: 'Click "Configure" on a skill from the left list, then edit its custom parameters here.'
+      riskConfirm: 'Risk Confirmation'
+      riskFindings: 'visible risk items'
+      install: 'Install & Enable'
+      installDisabled: 'Install Disabled'
+      cancel: 'Cancel'
+      unknown: 'unknown'
+      noDetails: 'No details available'
+      permission:
+        allow: 'Allow'
+        deny: 'Deny'
+        tool: 'tool'
+=======
     server-hostname:
       label: Expose On Network
       description: >-
@@ -1028,6 +1136,7 @@ pages:
       errors:
         title: QR scan failed
         failed: Failed to scan or connect with the QR code.
+>>>>>>> origin/main
   scene:
     description: Configure the environment where the character lives
     title: Scene
@@ -1108,8 +1217,8 @@ pages:
           presets:
             default:
               colors:
-                color-1: AIRI Green
-              description: The default greenish theme color, brought by AIRI to you!
+                color-1: Xclaw Green
+              description: The default greenish theme color, brought by Xclaw to you!
               title: Default Color
             morandi:
               colors:
@@ -1189,7 +1298,7 @@ sections:
 theme:
   title: Theme
   description: |
-    Switch the base theme of AIRI, Light mode or Dark mode.
+    Switch the base theme of Xclaw, Light mode or Dark mode.
 title: Settings
 voices: Voice
 vrm:

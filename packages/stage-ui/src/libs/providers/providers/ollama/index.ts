@@ -133,7 +133,7 @@ export const providerOllama = defineProvider<OllamaConfig>({
       },
     }
   },
-  validationRequiredWhen: () => true,
+  validationRequiredWhen: () => false,
   validators: {
     validateConfig: [
       ({ t }) => ({

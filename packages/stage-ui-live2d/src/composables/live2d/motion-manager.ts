@@ -28,6 +28,7 @@ export type MotionManagerPluginContext = MotionManagerUpdateContext & {
   live2dIdleAnimationEnabled: Ref<boolean>
   live2dAutoBlinkEnabled: Ref<boolean>
   live2dForceAutoBlinkEnabled: Ref<boolean>
+  motionLockEnabled: Ref<boolean>
   isIdleMotion: boolean
   handled: boolean
   markHandled: () => void
@@ -42,6 +43,7 @@ export interface UseLive2DMotionManagerUpdateOptions {
   live2dIdleAnimationEnabled: Ref<boolean>
   live2dAutoBlinkEnabled: Ref<boolean>
   live2dForceAutoBlinkEnabled: Ref<boolean>
+  motionLockEnabled: Ref<boolean>
   lastUpdateTime: Ref<number>
 }
 
@@ -53,6 +55,7 @@ export function useLive2DMotionManagerUpdate(options: UseLive2DMotionManagerUpda
     live2dIdleAnimationEnabled,
     live2dAutoBlinkEnabled,
     live2dForceAutoBlinkEnabled,
+    motionLockEnabled,
     lastUpdateTime,
   } = options
 
@@ -95,6 +98,7 @@ export function useLive2DMotionManagerUpdate(options: UseLive2DMotionManagerUpda
       live2dIdleAnimationEnabled,
       live2dAutoBlinkEnabled,
       live2dForceAutoBlinkEnabled,
+      motionLockEnabled,
       isIdleMotion,
       handled: false,
       markHandled: () => {
@@ -131,6 +135,9 @@ export function useLive2DMotionManagerUpdate(options: UseLive2DMotionManagerUpda
 
 export function useMotionUpdatePluginBeatSync(beatSync: BeatSyncController): MotionManagerPlugin {
   return (ctx) => {
+    if (ctx.motionLockEnabled.value) {
+      return
+    }
     beatSync.updateTargets(ctx.now)
 
     // Semi-implicit Euler approach

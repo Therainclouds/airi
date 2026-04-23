@@ -64,7 +64,11 @@ export function createSpeechPipeline<TAudio>(options: SpeechPipelineOptions<TAud
   const logger = options.logger ?? console
   const priorityResolver = options.priority ?? createPriorityResolver()
   const segmenter = options.segmenter ?? createTtsSegmentStream
+<<<<<<< HEAD
+  const ttsConcurrency = 2
+=======
   const ttsMaxConcurrent = Math.max(1, options.ttsMaxConcurrent ?? 4)
+>>>>>>> origin/main
   const context = createContext()
 
   const intents = new Map<string, IntentState>()
@@ -172,6 +176,60 @@ export function createSpeechPipeline<TAudio>(options: SpeechPipelineOptions<TAud
 
     try {
       const reader = segmentStream.getReader()
+      const pendingResults = new Map<number, Promise<{ request: TtsRequest, audio: TAudio | null } | null>>()
+      let requestIndex = 0
+      let nextScheduleIndex = 0
+
+      const scheduleTtsResult = (request: TtsRequest, audio: TAudio | null) => {
+        if (intent.controller.signal.aborted || !audio)
+          return
+
+        const ttsResult: TtsResult<TAudio> = {
+          streamId: request.streamId,
+          intentId: request.intentId,
+          segmentId: request.segmentId,
+          text: request.text,
+          special: request.special,
+          audio,
+          createdAt: Date.now(),
+        }
+
+        context.emit(speechPipelineEventMap.onTtsResult, ttsResult)
+
+        options.playback.schedule({
+          id: createId('playback'),
+          streamId: ttsResult.streamId,
+          intentId: ttsResult.intentId,
+          segmentId: ttsResult.segmentId,
+          ownerId: intent.ownerId,
+          priority: intent.priority,
+          text: ttsResult.text,
+          special: ttsResult.special,
+          audio: ttsResult.audio,
+          createdAt: Date.now(),
+        })
+      }
+
+      const flushReadyResults = async (force = false) => {
+        while (pendingResults.size > 0) {
+          const current = pendingResults.get(nextScheduleIndex)
+          if (!current) {
+            if (!force)
+              break
+            nextScheduleIndex += 1
+            continue
+          }
+
+          const resolved = await current
+          pendingResults.delete(nextScheduleIndex)
+          nextScheduleIndex += 1
+
+          if (!resolved)
+            continue
+
+          scheduleTtsResult(resolved.request, resolved.audio)
+        }
+      }
 
       while (true) {
         while (!intent.controller.signal.aborted && inFlightTasks.size >= ttsMaxConcurrent) {
@@ -207,11 +265,34 @@ export function createSpeechPipeline<TAudio>(options: SpeechPipelineOptions<TAud
         }
 
         context.emit(speechPipelineEventMap.onTtsRequest, request)
+<<<<<<< HEAD
+
+        const currentIndex = requestIndex++
+        pendingResults.set(currentIndex, (async () => {
+          try {
+            const audio = await options.tts(request, intent.controller.signal)
+            return { request, audio }
+          }
+          catch (err) {
+            logger.warn('TTS generation failed:', err)
+            if (intent.controller.signal.aborted)
+              return null
+            return { request, audio: null }
+          }
+        })())
+
+        if (pendingResults.size >= ttsConcurrency)
+          await flushReadyResults()
+      }
+
+      await flushReadyResults(true)
+=======
         createTtsTask(request)
       }
 
       await Promise.allSettled(inFlightTasks)
       scheduleCompletedRequests()
+>>>>>>> origin/main
       reader.releaseLock()
     }
     catch (err) {

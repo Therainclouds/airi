@@ -65,6 +65,37 @@ export const useContextBridgeStore = defineStore('mods:api:context-bridge', () =
     sparkNotifyHostRole.value = role
   }
 
+  function toSerializable<T>(value: T): T {
+    return JSON.parse(JSON.stringify(toRaw(value)))
+  }
+
+  function safeBroadcastStreamEvent(event: ChatStreamEvent) {
+    try {
+      broadcastStreamEvent(toSerializable(event))
+    }
+    catch (error) {
+      console.warn('Failed to broadcast stream event:', error)
+    }
+  }
+
+  function safeBroadcastContext(event: ContextMessage) {
+    try {
+      broadcastContext(toSerializable(event))
+    }
+    catch (error) {
+      console.warn('Failed to broadcast context event:', error)
+    }
+  }
+
+  function safeServerChannelSend(event: Parameters<typeof serverChannelStore.send>[0]) {
+    try {
+      serverChannelStore.send(toSerializable(event))
+    }
+    catch (error) {
+      console.warn('Failed to send server channel event:', error)
+    }
+  }
+
   async function initialize() {
     await mutex.acquire()
 
@@ -148,6 +179,10 @@ export const useContextBridgeStore = defineStore('mods:api:context-bridge', () =
           metadata: event.metadata,
           createdAt: Date.now(),
         }
+<<<<<<< HEAD
+        chatContext.ingestContextMessage(contextMessage)
+        safeBroadcastContext(contextMessage)
+=======
         const result = chatContext.ingestContextMessage(contextMessage)
         if (result) {
           contextObservability.recordLifecycle({
@@ -180,6 +215,7 @@ export const useContextBridgeStore = defineStore('mods:api:context-bridge', () =
           sourceLabel: event.metadata?.source?.plugin?.id ?? event.metadata?.source?.id ?? event.source,
           details: contextMessage,
         })
+>>>>>>> origin/main
       }))
 
       function withContextBridgeLock<T>(key: string, callback: () => Promise<T>) {
@@ -320,74 +356,116 @@ export const useContextBridgeStore = defineStore('mods:api:context-bridge', () =
           if (isProcessingRemoteStream)
             return
 
+<<<<<<< HEAD
+          safeBroadcastStreamEvent({ type: 'before-compose', message, sessionId: chatSession.activeSessionId, context: toSerializable(context) })
+=======
           broadcastStreamEvent({ type: 'before-compose', message, sessionId: chatSession.activeSessionId, context: structuredClone(normalizeContextSnapshot(context)) })
+>>>>>>> origin/main
         }),
         chatOrchestrator.onAfterMessageComposed(async (message, context) => {
           if (isProcessingRemoteStream)
             return
 
+<<<<<<< HEAD
+          safeBroadcastStreamEvent({ type: 'after-compose', message, sessionId: chatSession.activeSessionId, context: toSerializable(context) })
+=======
           broadcastStreamEvent({ type: 'after-compose', message, sessionId: chatSession.activeSessionId, context: structuredClone(normalizeContextSnapshot(context)) })
+>>>>>>> origin/main
         }),
         chatOrchestrator.onBeforeSend(async (message, context) => {
           if (isProcessingRemoteStream)
             return
 
+<<<<<<< HEAD
+          safeBroadcastStreamEvent({ type: 'before-send', message, sessionId: chatSession.activeSessionId, context: toSerializable(context) })
+=======
           broadcastStreamEvent({ type: 'before-send', message, sessionId: chatSession.activeSessionId, context: structuredClone(normalizeContextSnapshot(context)) })
+>>>>>>> origin/main
         }),
         chatOrchestrator.onAfterSend(async (message, context) => {
           if (isProcessingRemoteStream)
             return
 
+<<<<<<< HEAD
+          safeBroadcastStreamEvent({ type: 'after-send', message, sessionId: chatSession.activeSessionId, context: toSerializable(context) })
+=======
           broadcastStreamEvent({ type: 'after-send', message, sessionId: chatSession.activeSessionId, context: structuredClone(normalizeContextSnapshot(context)) })
+>>>>>>> origin/main
         }),
         chatOrchestrator.onTokenLiteral(async (literal, context) => {
           if (isProcessingRemoteStream)
             return
 
+<<<<<<< HEAD
+          safeBroadcastStreamEvent({ type: 'token-literal', literal, sessionId: chatSession.activeSessionId, context: toSerializable(context) })
+=======
           broadcastStreamEvent({ type: 'token-literal', literal, sessionId: chatSession.activeSessionId, context: structuredClone(normalizeContextSnapshot(context)) })
+>>>>>>> origin/main
         }),
         chatOrchestrator.onTokenSpecial(async (special, context) => {
           if (isProcessingRemoteStream)
             return
 
+<<<<<<< HEAD
+          safeBroadcastStreamEvent({ type: 'token-special', special, sessionId: chatSession.activeSessionId, context: toSerializable(context) })
+=======
           broadcastStreamEvent({ type: 'token-special', special, sessionId: chatSession.activeSessionId, context: structuredClone(normalizeContextSnapshot(context)) })
+>>>>>>> origin/main
         }),
         chatOrchestrator.onStreamEnd(async (context) => {
           if (isProcessingRemoteStream)
             return
 
+<<<<<<< HEAD
+          safeBroadcastStreamEvent({ type: 'stream-end', sessionId: chatSession.activeSessionId, context: toSerializable(context) })
+=======
           broadcastStreamEvent({ type: 'stream-end', sessionId: chatSession.activeSessionId, context: structuredClone(normalizeContextSnapshot(context)) })
+>>>>>>> origin/main
         }),
         chatOrchestrator.onAssistantResponseEnd(async (message, context) => {
           if (isProcessingRemoteStream)
             return
 
+<<<<<<< HEAD
+          safeBroadcastStreamEvent({ type: 'assistant-end', message, sessionId: chatSession.activeSessionId, context: toSerializable(context) })
+=======
           broadcastStreamEvent({ type: 'assistant-end', message, sessionId: chatSession.activeSessionId, context: structuredClone(normalizeContextSnapshot(context)) })
+>>>>>>> origin/main
         }),
 
         chatOrchestrator.onAssistantMessage(async (message, _messageText, context) => {
-          serverChannelStore.send({
+          const serializableContext = toSerializable(context)
+          const serializableMessage = toSerializable(message)
+          safeServerChannelSend({
             type: 'output:gen-ai:chat:message',
             data: {
-              ...context.input?.data,
-              message,
+              ...serializableContext.input?.data,
+              'message': serializableMessage,
               'stage-web': isStageWeb(),
               'stage-tamagotchi': isStageTamagotchi(),
               'gen-ai:chat': {
+<<<<<<< HEAD
+                message: serializableContext.message as UserMessage,
+                composedMessage: serializableContext.composedMessage,
+                contexts: serializableContext.contexts,
+                input: serializableContext.input,
+=======
                 message: context.message as UserMessage,
                 composedMessage: context.composedMessage,
                 contexts: context.contexts as any,
                 input: context.input,
+>>>>>>> origin/main
               },
             },
           })
         }),
 
         chatOrchestrator.onChatTurnComplete(async (chat, context) => {
-          serverChannelStore.send({
+          const serializableContext = toSerializable(context)
+          safeServerChannelSend({
             type: 'output:gen-ai:chat:complete',
             data: {
-              ...context.input?.data,
+              ...serializableContext.input?.data,
               'message': chat.output,
               // TODO: tool calls should be captured properly
               'toolCalls': [],
@@ -401,10 +479,17 @@ export const useContextBridgeStore = defineStore('mods:api:context-bridge', () =
                 source: 'estimate-based',
               },
               'gen-ai:chat': {
+<<<<<<< HEAD
+                message: serializableContext.message as UserMessage,
+                composedMessage: serializableContext.composedMessage,
+                contexts: serializableContext.contexts,
+                input: serializableContext.input,
+=======
                 message: context.message as UserMessage,
                 composedMessage: context.composedMessage,
                 contexts: context.contexts as any,
                 input: context.input,
+>>>>>>> origin/main
               },
             },
           })

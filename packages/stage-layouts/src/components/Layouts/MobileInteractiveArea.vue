@@ -62,6 +62,18 @@ const { audioContext } = useAudioContext()
 const { startAnalyzer, stopAnalyzer, volumeLevel } = useAudioAnalyzer()
 let analyzerSource: MediaStreamAudioSourceNode | undefined
 
+function shouldDiscoverActiveProviderToolsCompatibility() {
+  if (!activeProvider.value || !activeModel.value) {
+    return false
+  }
+
+  if (['lobster-agent', 'openclaw-agent'].includes(activeProvider.value)) {
+    return (providersStore.getProviderConfig(activeProvider.value) as Record<string, any>)?.useBridge === false
+  }
+
+  return true
+}
+
 function isMobileDevice() {
   return /Mobi|Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
 }
@@ -134,6 +146,15 @@ watch(hearingDialogOpen, (value) => {
 onAfterMessageComposed(async () => {
 })
 
+<<<<<<< HEAD
+watch([activeProvider, activeModel], async () => {
+  if (shouldDiscoverActiveProviderToolsCompatibility()) {
+    await discoverToolsCompatibility(activeModel.value, await providersStore.getProviderInstance<ChatProvider>(activeProvider.value), [])
+  }
+})
+
+=======
+>>>>>>> origin/main
 onUnmounted(() => {
   teardownAnalyzer()
 })

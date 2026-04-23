@@ -67,7 +67,11 @@ watch(isDesktop, (val) => {
 <template>
   <div v-if="isDesktop" class="min-h-screen flex flex-col items-center justify-center font-cuteen">
     <div class="mb-8 text-3xl font-bold">
+<<<<<<< HEAD:apps/stage-web/src/pages/auth/login.vue
+      Sign in to Xclaw Stage
+=======
       {{ t('server.auth.signIn.title') }}
+>>>>>>> origin/main:apps/stage-web/src/pages/auth/sign-in.vue
     </div>
     <div class="max-w-xs w-full flex flex-col gap-3">
       <Button

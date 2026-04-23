@@ -43,7 +43,11 @@ const {
 
 // Popular providers for first-time setup
 const popularProviders = computed(() => {
+<<<<<<< HEAD
+  const popular = ['openclaw-agent', 'lobster-agent', 'openai', 'anthropic', 'google-generative-ai', 'groq', 'openrouter-ai', 'ollama', 'deepseek', 'player2', 'openai-compatible']
+=======
   const popular = ['openai', 'azure-openai', 'anthropic', 'google-generative-ai', 'groq', 'nvidia', 'openrouter-ai', 'ollama', 'deepseek', 'player2', 'openai-compatible']
+>>>>>>> origin/main
   return allChatProvidersMetadata.value
     .filter(provider => popular.includes(provider.id))
     .sort((a, b) => popular.indexOf(a.id) - popular.indexOf(b.id))

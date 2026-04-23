@@ -294,5 +294,12 @@ export const useAiriCardStore = defineStore('airi-card', () => {
 
       return components.join('\n')
     }),
+    bridgeSystemPrompt: computed(() => {
+      const card = activeCard.value
+      if (!card)
+        return ''
+
+      return card.extensions?.airi?.agents?.openclaw?.prompt?.trim() ?? ''
+    }),
   }
 })

@@ -26,8 +26,13 @@ import './moonshot-ai'
 import './modelscope'
 import './ollama'
 import './cloudflare-workers-ai'
+<<<<<<< HEAD
+import './openclaw-agent'
+import './lobster-agent'
+=======
 import './azure-ai-foundry'
 import './official'
+>>>>>>> origin/main
 
 export {
   getDefinedProvider,

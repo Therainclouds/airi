@@ -233,7 +233,12 @@ export function setupTray(params: {
       rebuildContextMenu()
     })
 
+<<<<<<< HEAD
+    appTray.setContextMenu(contextMenu)
+    appTray.setToolTip('Project Xclaw')
+=======
     appTray.setToolTip('Project AIRI')
+>>>>>>> origin/main
     appTray.addListener('click', () => toggleWindowShow(params.mainWindow))
 
     // On macOS, there's a special double-click event
